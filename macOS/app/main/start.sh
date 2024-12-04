@@ -108,5 +108,7 @@ sudo $TMP_DATA/run.sh
 # Ré-activer les vérifications de signature & XprotectService
 sudo spctl --master-enable
 
+# Appeler la fonction de nettoyage
 cleanup_TMP_DATA
+
 exit 0
