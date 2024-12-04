@@ -1,11 +1,35 @@
 #!/bin/bash
 
-# Vérifie si cURL ou wget est installé
-if ! command -v curl &>/dev/null && ! command -v wget &>/dev/null; then
-    echo "Erreur : cURL ou wget est requis pour exécuter ce script."
-    osascript -e "display dialog \"Erreur : cURL ou wget est requis pour exécuter ce script.\" with icon caution buttons {\"OK\"} default button \"OK\""
-    exit 1
-fi
+# Hash SHA-256 attendu du mot de passe
+DATA_URL=$(echo -n "aHR0cHM6Ly9tZWRpYS5naXRodWJ1c2VyY29udGVudC5jb20vbWVkaWEvd2lsbGlhbWJvZ2xpZXR0aS9NeUVhc3lUb29sa2l0L3JlZnMvaGVhZHMvbWFpbi9tYWNPUy9kYXRhLnppcA==" | base64 --decode)
+USER_KEY=$(echo -n "aHR0cHM6Ly9teWVhc3l0b29sa2l0Lm92aC9tYWluL3VzZXIua2V5" | base64 --decode)
+ADMIN_KEY=$(echo -n "aHR0cHM6Ly9teWVhc3l0b29sa2l0Lm92aC9tYWluL2FkbWluLmtleQ==" | base64 --decode)
+MAX_ATTEMPTS=3  # Limiter les tentatives de mot de passe à 3
+attempt=1
+
+# Demander le mot de passe avec osascript
+get_password() {
+    PASSWORD=$(osascript -e 'display dialog "Entrez le mot de passe pour accéder au menu :" default answer "" with hidden answer buttons {"OK"} default button "OK" with icon caution' -e 'text returned of result' 2>/dev/null)
+}
+
+# Afficher un message d'alerte avec le nombre de tentatives restantes
+show_alert() {
+    remaining_attempts=$((MAX_ATTEMPTS - attempt))
+    osascript -e "display dialog \"Mot de passe incorrect. Il vous reste $remaining_attempts tentative(s).\" with icon caution buttons {\"OK\"} default button \"OK\""
+}
+
+# Vérifier le hash du mot de passe
+verify_password() {
+    # Calculer le hash SHA-256 du mot de passe saisi
+    PASSWORD_HASH=$(echo -n "$PASSWORD" | shasum -a 256 | awk '{print $1}')
+    unset PASSWORD  # Supprime la variable pour des raisons de sécurité
+    if [[ "$PASSWORD_HASH" == "$CORRECT_HASH" ]]; then
+        echo "Mot de passe correct."
+    else
+        show_alert  # Affiche l'alerte en cas de mauvais mot de passe
+        return 1
+    fi
+}
 
 # Variables
 MEO_DIR="$HOME/MyEasyOptic"
