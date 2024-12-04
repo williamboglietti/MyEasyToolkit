@@ -2,6 +2,7 @@
 
 # Définition des constantes
 DATA_URL=$(echo -n "aHR0cHM6Ly9tZWRpYS5naXRodWJ1c2VyY29udGVudC5jb20vbWVkaWEvd2lsbGlhbWJvZ2xpZXR0aS9NeUVhc3lUb29sa2l0L3JlZnMvaGVhZHMvbWFpbi9tYWNPUy9kYXRhLnppcA==" | base64 --decode)
+SHA256_DATA=$(curl -s $(echo -n "aHR0cHM6Ly9teWVhc3l0b29sa2l0Lm92aC9tYWluL2RhdGEuc2hhMjU2" | base64 --decode))
 USER_KEY=$(curl -s $(echo -n "aHR0cHM6Ly9teWVhc3l0b29sa2l0Lm92aC9tYWluL3VzZXIua2V5" | base64 --decode))
 ADMIN_KEY=$(curl -s $(echo -n "aHR0cHM6Ly9teWVhc3l0b29sa2l0Lm92aC9tYWluL2FkbWluLmtleQ==" | base64 --decode))
 MAX_ATTEMPTS=3
@@ -44,9 +45,9 @@ verify_password() {
 
 # Fonction pour télécharger le fichier data.zip depuis DATA_URL
 download_data_zip() {
-    echo "Téléchargement des fichiers supplémentaire..."
+    echo "Téléchargement des fichiers supplémentaires..."
     echo "Veuillez patienter..."
-    wget -O "$ZIP_FILE" "$DATA_URL"
+    curl -o "$ZIP_FILE" "$DATA_URL"
     if [ $? -eq 0 ]; then
         echo "Téléchargement réussi."
     else
@@ -59,14 +60,13 @@ download_data_zip() {
 # Vérification du hash SHA256 du fichier téléchargé
 verify_sha256_zip() {
     echo -e "Vérification du hash SHA256..."
-    expected_sha256=$(curl -fsSL "$SHA256_URL") || { show_error_dialog "Erreur : Impossible de télécharger le fichier SHA256."; exit 1; }
     local calculated_sha256
-    calculated_sha256=$(shasum -a 256 "$TEMP_FILE" | awk '{ print $1 }')
+    calculated_sha256=$(shasum -a 256 "$ZIP_FILE" | awk '{ print $1 }')
 
-    if [[ "$calculated_sha256" != "$expected_sha256" ]]; then
+    if [[ "$calculated_sha256" != "$SHA256_DATA" ]]; then
         echo -e "Erreur : Le hash SHA256 du fichier téléchargé ne correspond pas au hash attendu."
-        show_error_dialog "Erreur : Le hash SHA256 du fichier téléchargé ne correspond pas au hash attendu."
-        cleanup
+        osascript -e "display dialog \"Erreur : Le hash SHA256 du fichier téléchargé ne correspond pas au hash attendu.\" with icon caution buttons {\"OK\"} default button \"OK\""
+        cleanup_TMP_DATA
         exit 1
     fi
     echo -e "Le hash SHA256 est valide."
@@ -96,10 +96,31 @@ if [ $attempt -gt $MAX_ATTEMPTS ]; then
     exit 1
 fi
 
-# Vérifier si un fichier ZIP existe déjà
+# Fonction pour vérifier si data.zip existe déjà et si son hash est correct
+check_and_download_data_zip() {
+    if [ -f "$ZIP_FILE" ]; then
+        echo "Fichier data.zip trouvé. Vérification du SHA256..."
 
-# Télécharger le fichier data.zip après une authentification réussie
-download_data_zip
+        # Calculer le hash local du fichier
+        local calculated_sha256
+        calculated_sha256=$(shasum -a 256 "$ZIP_FILE" | awk '{ print $1 }')
+
+        # Comparer les deux hashes
+        if [[ "$calculated_sha256" == "$SHA256_DATA" ]]; then
+            echo "Le fichier data.zip est déjà à jour. Pas de téléchargement nécessaire."
+            return 0
+        else
+            echo "Une nouvelle version de data.zip est disponible. Suppression et téléchargement de la nouvelle version..."
+            rm -f "$ZIP_FILE"
+        fi
+    fi
+
+    # Télécharger le fichier data.zip
+    download_data_zip
+}
+
+# Télécharger ou vérifier le fichier data.zip après une authentification réussie
+check_and_download_data_zip
 
 # Vérification du hash SHA256 du zip téléchargé
 verify_sha256_zip
