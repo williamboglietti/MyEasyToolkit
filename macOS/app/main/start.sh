@@ -47,7 +47,10 @@ verify_password() {
 download_data_zip() {
     echo "Téléchargement des fichiers supplémentaires..."
     echo "Veuillez patienter..."
-    curl -o "$ZIP_FILE" "$DATA_URL"
+
+    # Ajouter une barre de progression avec `--progress-bar`
+    curl --progress-bar -o "$ZIP_FILE" "$DATA_URL"
+    
     if [ $? -eq 0 ]; then
         echo "Téléchargement réussi."
     else
