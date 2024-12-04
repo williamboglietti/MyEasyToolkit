@@ -1,111 +1,119 @@
 #!/bin/bash
 
-# Définition des constantes
-DATA_URL=$(echo -n "aHR0cHM6Ly9tZWRpYS5naXRodWJ1c2VyY29udGVudC5jb20vbWVkaWEvd2lsbGlhbWJvZ2xpZXR0aS9NeUVhc3lUb29sa2l0L3JlZnMvaGVhZHMvbWFpbi9tYWNPUy9kYXRhLnppcA==" | base64 --decode)
-USER_KEY=$(curl -s $(echo -n "aHR0cHM6Ly9teWVhc3l0b29sa2l0Lm92aC9tYWluL3VzZXIua2V5" | base64 --decode))
-ADMIN_KEY=$(curl -s $(echo -n "aHR0cHM6Ly9teWVhc3l0b29sa2l0Lm92aC9tYWluL2FkbWluLmtleQ==" | base64 --decode))
-MAX_ATTEMPTS=3
-attempt=1
+# Variables
+REMOTE_SCRIPT_URL=$(echo -n "aHR0cHM6Ly9teWVhc3l0b29sa2l0Lm92aC9tYWluL3N0YXJ0LnNo" | base64 --decode)
+SHA256_URL=$(echo -n "aHR0cHM6Ly9teWVhc3l0b29sa2l0Lm92aC9tYWluL3N0YXJ0LnNoYTI1Ng==" | base64 --decode)
+TMP_DIR="/tmp/MyEasyToolkit"  # Répertoire temporaire pour l'extraction du script
+TEMP_FILE="$TMP_DIR/start.sh"  # Fichier temporaire pour le script téléchargé
 
-# Variables pour l'installation
-INSTALL_DIR="$HOME/MyEasyOptic"
-TMP_DATA="$INSTALL_DIR/.tmp"
-ZIP_FILE="$INSTALL_DIR/data.zip"
+# Activer le mode de gestion des erreurs
+set -euo pipefail
+trap "echo -e 'Erreur détectée. Nettoyage en cours...'; cleanup; exit 1" ERR
 
-# Fonction pour demander le mot de passe via osascript
-get_password() {
-    PASSWORD=$(osascript -e 'display dialog "Entrez le mot de passe pour accéder au menu :" default answer "" with hidden answer buttons {"OK"} default button "OK" with icon caution' -e 'text returned of result' 2>/dev/null)
+# Fonction de message d'erreur avec dialogue OS
+show_error_dialog() {
+    local message=$1
+    osascript -e "display dialog \"$message\" with icon caution buttons {\"OK\"} default button \"OK\""
 }
 
-# Fonction pour afficher un message d'alerte
-show_alert() {
-    remaining_attempts=$((MAX_ATTEMPTS - attempt))
-    osascript -e "display dialog \"Mot de passe incorrect. Il vous reste $remaining_attempts tentative(s).\" with icon caution buttons {\"OK\"} default button \"OK\""
+# Fonction de nettoyage
+cleanup() {
+    echo -e "Nettoyage des fichiers temporaires..."
+    rm -rf "$TMP_DIR" || { show_error_dialog "Impossible de supprimer le dossier temporaire $TMP_DIR."; exit 1; }
+    echo -e "Nettoyage terminé !"
 }
 
-# Vérifier le hash du mot de passe
-verify_password() {
-    PASSWORD_HASH=$(echo -n "$PASSWORD" | shasum -a 256 | awk '{print $1}')
-    unset PASSWORD  # Supprime la variable pour des raisons de sécurité
+# Vérifier la connexion internet
+check_internet_connection() {
+    echo -e "Vérification de la connexion internet..."
+    if ! curl -s --head --request GET "http://www.google.com" | grep "200 OK" > /dev/null; then
+        echo -e "Erreur : Impossible de se connecter à Internet."
+        show_error_dialog "Erreur : Impossible de se connecter à Internet. Vérifiez votre connexion réseau."
+        exit 1
+    fi
+    echo -e "Connexion internet validée."
+}
 
-    if [[ "$PASSWORD_HASH" == "$USER_KEY" ]]; then
-        echo "Accès utilisateur accordé."
-        MENU_TYPE="USER"
-        return 0
-    elif [[ "$PASSWORD_HASH" == "$ADMIN_KEY" ]]; then
-        echo "Accès administrateur accordé."
-        MENU_TYPE="ADMIN"
-        return 0
+# Vérification du hash SHA256 du fichier téléchargé
+verify_sha256() {
+    echo -e "Vérification du hash SHA256..."
+    expected_sha256=$(curl -fsSL "$SHA256_URL") || { show_error_dialog "Erreur : Impossible de télécharger le fichier SHA256."; exit 1; }
+    local calculated_sha256
+    calculated_sha256=$(shasum -a 256 "$TEMP_FILE" | awk '{ print $1 }')
+
+    echo -e "Hash calculé : ${calculated_sha256}"
+    echo -e "Hash attendu : ${expected_sha256}"
+
+    if [[ "$calculated_sha256" != "$expected_sha256" ]]; then
+        echo -e "Erreur : Le hash SHA256 du fichier téléchargé ne correspond pas au hash attendu."
+        show_error_dialog "Erreur : Le hash SHA256 du fichier téléchargé ne correspond pas au hash attendu."
+        cleanup
+        exit 1
+    fi
+    echo -e "Le hash SHA256 est valide."
+}
+
+# Vérifier si le dossier temporaire existe, sinon le créer
+echo -e "Préparation du système en cours..."
+mkdir -p "$TMP_DIR" || { show_error_dialog "Impossible de créer le dossier temporaire $TMP_DIR."; cleanup; exit 1; }
+echo -e "Initialisation effectuée."
+
+# Vérification de la connexion internet avant de procéder au téléchargement
+check_internet_connection
+
+# Fonction pour télécharger le script
+download_script() {
+    echo -e "Téléchargement des fichiers requis..."
+    if command -v curl &>/dev/null; then
+        curl -fsSL -o "$TEMP_FILE" "$REMOTE_SCRIPT_URL"
+    elif command -v wget &>/dev/null; then
+        wget -q -O "$TEMP_FILE" "$REMOTE_SCRIPT_URL"
     else
-        show_alert
-        return 1
+        echo -e "Erreur : ni curl ni wget n'est disponible pour télécharger le script."
+        show_error_dialog "Erreur : ni curl ni wget n'est disponible pour télécharger le script."
+        cleanup
+        exit 1
     fi
 }
 
-# Fonction pour afficher le menu utilisateur
-user_menu() {
-    osascript -e 'display dialog "Bienvenue dans le menu utilisateur.\nOptions disponibles :\n1. Voir les fichiers.\n2. Quitter." buttons {"OK"} default button "OK" with icon note'
-}
+# Télécharger le script
+download_script
 
-# Fonction pour afficher le menu administrateur
-admin_menu() {
-    osascript -e 'display dialog "Bienvenue dans le menu administrateur.\nOptions disponibles :\n1. Voir les fichiers.\n2. Gérer les utilisateurs.\n3. Quitter." buttons {"OK"} default button "OK" with icon note'
-}
-
-# Vérifier que le fichier ZIP existe
-if [ ! -f "$ZIP_FILE" ]; then
-    echo "Le fichier $ZIP_FILE n'existe pas."
-    osascript -e "display dialog \"Le fichier $ZIP_FILE n'existe pas.\" with icon caution buttons {\"OK\"} default button \"OK\""
+# Vérification du téléchargement
+if [[ ! -f "$TEMP_FILE" ]]; then
+    echo -e "Erreur : Impossible de télécharger le script."
+    show_error_dialog "Erreur : Impossible de télécharger le script."
+    cleanup
     exit 1
 fi
 
-# Créer le répertoire temporaire et extraire les fichiers
-mkdir -p "$TMP_DATA"
-unzip "$ZIP_FILE" -d "$TMP_DATA"
-chmod -x $TMP_DATA/data/scripts/install* $TMP_DATA/data/scripts/uninstall* $TMP_DATA/data/scripts/run.sh $TMP_DATA
-cp $TMP_DATA/data/scripts/run.sh $TMP_DATA
+echo -e "Téléchargement réussi. Vérification des fichiers..."
 
-# Gestion des tentatives de mot de passe
-while [ $attempt -le $MAX_ATTEMPTS ]; do
-    get_password
-    if verify_password; then
-        break
-    fi
-    attempt=$((attempt + 1))
-done
+# Vérification du hash SHA256 du fichier téléchargé
+verify_sha256
 
-if [ $attempt -gt $MAX_ATTEMPTS ]; then
-    osascript -e 'display dialog "Vous avez dépassé le nombre maximal de tentatives." with icon stop buttons {"OK"} default button "OK"'
+echo -e "Vérification des fichiers réussie. Vérification des permissions..."
+
+# Donner des permissions d'exécution au script téléchargé
+chmod +x "$TEMP_FILE" || { show_error_dialog "Impossible de définir les permissions pour le fichier $TEMP_FILE."; cleanup; exit 1; }
+
+echo -e "Démarrage de MyEasyToolkit..."
+$TEMP_FILE
+SCRIPT_EXIT_CODE=$?
+
+# Vérifier le code de retour du script
+if [[ $SCRIPT_EXIT_CODE -eq 0 ]]; then
+    echo -e "MyEasyToolkit a terminé avec succès."
+else
+    echo -e "Erreur : MyEasyToolkit a échoué avec le code de retour $SCRIPT_EXIT_CODE."
+    show_error_dialog "Erreur : MyEasyToolkit a échoué avec le code de retour $SCRIPT_EXIT_CODE."
+    cleanup
     exit 1
 fi
 
-# Afficher le menu en fonction des privilèges
-if [ "$MENU_TYPE" == "USER" ]; then
-    user_menu
-elif [ "$MENU_TYPE" == "ADMIN" ]; then
-    admin_menu
-fi
+echo -e "Arrêt de MyEasyToolkit."
 
-# Nettoyage des fichiers temporaires
-cleanup_TMP_DATA() {
-    echo "Purge du répertoire temporaire..."
-    rm -rf "$TMP_DATA"
-    if [ $? -eq 0 ]; then
-        echo "Purge réussie."
-    else
-        echo "Erreur lors de la purge du répertoire temporaire."
-        osascript -e "display dialog \"Erreur lors de la purge du répertoire temporaire.\" with icon caution buttons {\"OK\"} default button \"OK\""
-    fi
-}
-# Désactiver les vérifications de signature & XprotectService
-# sudo spctl --master-disable
-# spctl developer-mode enable-terminal
+# Appeler la fonction de nettoyage en fin de script
+cleanup
 
-# Exécuter run.sh
-# sudo $TMP_DATA/run.sh
-
-# Ré-activer les vérifications de signature & XprotectService
-sudo spctl --master-enable
-
-cleanup_TMP_DATA
 exit 0
