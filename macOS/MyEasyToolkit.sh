@@ -41,9 +41,6 @@ verify_sha256() {
     local calculated_sha256
     calculated_sha256=$(shasum -a 256 "$TEMP_FILE" | awk '{ print $1 }')
 
-    echo -e "Hash calculé : ${calculated_sha256}"
-    echo -e "Hash attendu : ${expected_sha256}"
-
     if [[ "$calculated_sha256" != "$expected_sha256" ]]; then
         echo -e "Erreur : Le hash SHA256 du fichier téléchargé ne correspond pas au hash attendu."
         show_error_dialog "Erreur : Le hash SHA256 du fichier téléchargé ne correspond pas au hash attendu."

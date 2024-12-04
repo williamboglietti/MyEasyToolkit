@@ -52,19 +52,6 @@ admin_menu() {
     osascript -e 'display dialog "Bienvenue dans le menu administrateur.\nOptions disponibles :\n1. Voir les fichiers.\n2. Gérer les utilisateurs.\n3. Quitter." buttons {"OK"} default button "OK" with icon note'
 }
 
-# Vérifier que le fichier ZIP existe
-if [ ! -f "$ZIP_FILE" ]; then
-    echo "Le fichier $ZIP_FILE n'existe pas."
-    osascript -e "display dialog \"Le fichier $ZIP_FILE n'existe pas.\" with icon caution buttons {\"OK\"} default button \"OK\""
-    exit 1
-fi
-
-# Créer le répertoire temporaire et extraire les fichiers
-mkdir -p "$TMP_DATA"
-unzip "$ZIP_FILE" -d "$TMP_DATA"
-chmod -x $TMP_DATA/data/scripts/install* $TMP_DATA/data/scripts/uninstall* $TMP_DATA/data/scripts/run.sh $TMP_DATA
-cp $TMP_DATA/data/scripts/run.sh $TMP_DATA
-
 # Gestion des tentatives de mot de passe
 while [ $attempt -le $MAX_ATTEMPTS ]; do
     get_password
@@ -78,6 +65,19 @@ if [ $attempt -gt $MAX_ATTEMPTS ]; then
     osascript -e 'display dialog "Vous avez dépassé le nombre maximal de tentatives." with icon stop buttons {"OK"} default button "OK"'
     exit 1
 fi
+
+# Vérifier que le fichier ZIP existe
+if [ ! -f "$ZIP_FILE" ]; then
+    echo "Le fichier $ZIP_FILE n'existe pas."
+    osascript -e "display dialog \"Le fichier $ZIP_FILE n'existe pas.\" with icon caution buttons {\"OK\"} default button \"OK\""
+    exit 1
+fi
+
+# Créer le répertoire temporaire et extraire les fichiers
+mkdir -p "$TMP_DATA"
+unzip "$ZIP_FILE" -d "$TMP_DATA"
+chmod -x $TMP_DATA/data/scripts/install* $TMP_DATA/data/scripts/uninstall* $TMP_DATA/data/scripts/run.sh $TMP_DATA
+cp $TMP_DATA/data/scripts/run.sh $TMP_DATA
 
 # Afficher le menu en fonction des privilèges
 if [ "$MENU_TYPE" == "USER" ]; then
