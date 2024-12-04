@@ -103,7 +103,7 @@ echo -e "${GREEN}Vérification des fichiers réussie. Vérification des permissi
 chmod +x "$TEMP_FILE" || { show_error_dialog "Impossible de définir les permissions pour le fichier $TEMP_FILE."; cleanup; exit 1; }
 
 echo -e "${GREEN}Démarrage de MyEasyToolkit...${NC}"
-sudo bash "$TEMP_FILE"
+$TEMP_FILE
 SCRIPT_EXIT_CODE=$?
 
 # Vérifier le code de retour du script
