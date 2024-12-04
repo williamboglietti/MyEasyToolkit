@@ -1,34 +1,5 @@
 #!/bin/bash
 
-# Hash SHA-256 attendu du mot de passe "maceasyoptic"
-CORRECT_HASH="1efc65049be6d84b51c47bab6fdd682289e0cf8037bcd5ac14b09e9d2e5ac0e7"
-MAX_ATTEMPTS=3  # Limiter les tentatives de mot de passe à 3
-attempt=1
-
-# Demander le mot de passe avec osascript
-get_password() {
-    PASSWORD=$(osascript -e 'display dialog "Entrez le mot de passe pour accéder au menu :" default answer "" with hidden answer buttons {"OK"} default button "OK" with icon caution' -e 'text returned of result' 2>/dev/null)
-}
-
-# Afficher un message d'alerte avec le nombre de tentatives restantes
-show_alert() {
-    remaining_attempts=$((MAX_ATTEMPTS - attempt))
-    osascript -e "display dialog \"Mot de passe incorrect. Il vous reste $remaining_attempts tentative(s).\" with icon caution buttons {\"OK\"} default button \"OK\""
-}
-
-# Vérifier le hash du mot de passe
-verify_password() {
-    # Calculer le hash SHA-256 du mot de passe saisi
-    PASSWORD_HASH=$(echo -n "$PASSWORD" | shasum -a 256 | awk '{print $1}')
-    unset PASSWORD  # Supprime la variable pour des raisons de sécurité
-    if [[ "$PASSWORD_HASH" == "$CORRECT_HASH" ]]; then
-        echo "Mot de passe correct. Accès autorisé."
-    else
-        show_alert  # Affiche l'alerte en cas de mauvais mot de passe
-        return 1
-    fi
-}
-
 # Fonction pour afficher le menu
 show_menu() {
     echo -e "\033[1mChoisissez une option :\033[0m"

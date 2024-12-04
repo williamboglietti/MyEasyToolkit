@@ -42,6 +42,36 @@ verify_password() {
     fi
 }
 
+# Fonction pour télécharger le fichier data.zip depuis DATA_URL
+download_data_zip() {
+    echo "Téléchargement des fichiers supplémentaire..."
+    echo "Veuillez patienter..."
+    wget -O "$ZIP_FILE" "$DATA_URL"
+    if [ $? -eq 0 ]; then
+        echo "Téléchargement réussi."
+    else
+        echo "Erreur lors du téléchargement du fichier data.zip."
+        osascript -e "display dialog \"Erreur lors du téléchargement du fichier data.zip.\" with icon caution buttons {\"OK\"} default button \"OK\""
+        exit 1
+    fi
+}
+
+# Vérification du hash SHA256 du fichier téléchargé
+verify_sha256_zip() {
+    echo -e "Vérification du hash SHA256..."
+    expected_sha256=$(curl -fsSL "$SHA256_URL") || { show_error_dialog "Erreur : Impossible de télécharger le fichier SHA256."; exit 1; }
+    local calculated_sha256
+    calculated_sha256=$(shasum -a 256 "$TEMP_FILE" | awk '{ print $1 }')
+
+    if [[ "$calculated_sha256" != "$expected_sha256" ]]; then
+        echo -e "Erreur : Le hash SHA256 du fichier téléchargé ne correspond pas au hash attendu."
+        show_error_dialog "Erreur : Le hash SHA256 du fichier téléchargé ne correspond pas au hash attendu."
+        cleanup
+        exit 1
+    fi
+    echo -e "Le hash SHA256 est valide."
+}
+
 # Fonction pour afficher le menu utilisateur
 user_menu() {
     osascript -e 'display dialog "Bienvenue dans le menu utilisateur.\nOptions disponibles :\n1. Voir les fichiers.\n2. Quitter." buttons {"OK"} default button "OK" with icon note'
@@ -66,12 +96,13 @@ if [ $attempt -gt $MAX_ATTEMPTS ]; then
     exit 1
 fi
 
-# Vérifier que le fichier ZIP existe
-if [ ! -f "$ZIP_FILE" ]; then
-    echo "Le fichier $ZIP_FILE n'existe pas."
-    osascript -e "display dialog \"Le fichier $ZIP_FILE n'existe pas.\" with icon caution buttons {\"OK\"} default button \"OK\""
-    exit 1
-fi
+# Vérifier si un fichier ZIP existe déjà
+
+# Télécharger le fichier data.zip après une authentification réussie
+download_data_zip
+
+# Vérification du hash SHA256 du zip téléchargé
+verify_sha256_zip
 
 # Créer le répertoire temporaire et extraire les fichiers
 mkdir -p "$TMP_DATA"
@@ -103,7 +134,7 @@ sudo spctl --master-disable
 spctl developer-mode enable-terminal
 
 # Exécuter run.sh
-sudo $TMP_DATA/run.sh
+# sudo $TMP_DATA/run.sh
 
 # Ré-activer les vérifications de signature & XprotectService
 sudo spctl --master-enable
