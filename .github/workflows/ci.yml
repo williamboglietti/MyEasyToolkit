@@ -27,6 +27,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./tests/install-windows.ps1
+      - name: Test Windows PowerShell 5 installer
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: ./tests/install-windows.ps1
       - name: Install static build tools
         if: runner.os == 'Linux'
         shell: bash
