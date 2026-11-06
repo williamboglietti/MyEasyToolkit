@@ -24,9 +24,9 @@ chmod +x "$work_dir/bin/uname" "$work_dir/bin/curl"
 printf '#!/usr/bin/env bash\nprintf "installed\\n"\n' > "$work_dir/payload/myeasytoolkit"
 tar -czf "$work_dir/fixture/myeasytoolkit-darwin-arm64.tar.gz" -C "$work_dir/payload" myeasytoolkit
 sha256sum "$work_dir/fixture/myeasytoolkit-darwin-arm64.tar.gz" > "$work_dir/fixture/myeasytoolkit-darwin-arm64.tar.gz.sha256"
-export FIXTURE="$work_dir/fixture" HOME="$work_dir/home" PATH="$work_dir/bin:$PATH"
+export FIXTURE="$work_dir/fixture" MET_INSTALL_DIR="$work_dir/home/.local/bin" PATH="$work_dir/bin:$PATH"
 bash installers/install.sh
-[[ "$("$HOME/.local/bin/myeasytoolkit")" == installed ]]
+[[ "$("$MET_INSTALL_DIR/myeasytoolkit")" == installed ]]
 printf 'wrong checksum\n' > "$FIXTURE/myeasytoolkit-darwin-arm64.tar.gz.sha256"
 if bash installers/install.sh; then
   echo 'Une somme de contrôle invalide aurait dû faire échouer l installation.' >&2
