@@ -7,7 +7,7 @@ function request(userAgent, accept = '*/*') {
   return new Request(root, { headers: { 'User-Agent': userAgent, Accept: accept } });
 }
 test('selects the browser page, PowerShell, or portable shell installer', () => {
-  assert.equal(requestedAsset(request('Mozilla/5.0 Firefox/1', 'text/html')), '/download.html');
+  assert.equal(requestedAsset(request('Mozilla/5.0 Firefox/1', 'text/html')), '/download');
   assert.equal(requestedAsset(request('Mozilla/5.0 WindowsPowerShell/5.1', 'text/html')), '/install.ps1');
   assert.equal(requestedAsset(request('curl/8.0')), '/install.sh');
   assert.equal(requestedAsset(request('Wget/1.0')), '/install.sh');

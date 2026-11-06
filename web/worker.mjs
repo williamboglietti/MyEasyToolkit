@@ -5,7 +5,7 @@ export function requestedAsset(request) {
   const userAgent = request.headers.get('user-agent') || '';
   const accept = request.headers.get('accept') || '';
   if (/powershell/i.test(userAgent)) return '/install.ps1';
-  if (/text\/html/i.test(accept) && /mozilla/i.test(userAgent)) return '/download.html';
+  if (/text\/html/i.test(accept) && /mozilla/i.test(userAgent)) return '/download';
   return '/install.sh';
 }
 
