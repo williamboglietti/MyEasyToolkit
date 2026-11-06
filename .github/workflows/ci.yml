@@ -1,0 +1,57 @@
+name: Build and test
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04-arm, macos-15-intel, macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Lint
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --locked
+      - name: Install static build tools
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          if [[ "${{ runner.arch }}" == "ARM64" ]]; then
+            echo "TARGET=aarch64-unknown-linux-musl" >> "$GITHUB_ENV"
+          else
+            echo "TARGET=x86_64-unknown-linux-musl" >> "$GITHUB_ENV"
+          fi
+      - name: Add Linux target
+        if: runner.os == 'Linux'
+        shell: bash
+        run: rustup target add "$TARGET"
+      - name: Build Debian package
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash packaging/build-deb.sh
+      - name: Verify Debian package
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get install -y ./dist/*.deb
+          myeasytoolkit --version
+      - name: Upload Debian package
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ runner.arch }}
+          path: dist/*.deb
+          if-no-files-found: error
