@@ -5,7 +5,17 @@ if [[ "$(uname -s)" != Linux ]]; then
   echo 'La construction du paquet Debian doit être effectuée sous Linux.' >&2
   exit 1
 fi
-version="${1:-0.1.0}"
+if [[ $# -gt 0 ]]; then
+  version="$1"
+else
+  package_id="$(cargo pkgid --locked)"
+  version="${package_id##*#}"
+  version="${version##*@}"
+fi
+if ! dpkg --validate-version "$version"; then
+  echo 'Version Debian invalide.' >&2
+  exit 1
+fi
 case "$(uname -m)" in
   x86_64) arch=amd64 ;;
   aarch64|arm64) arch=arm64 ;;
