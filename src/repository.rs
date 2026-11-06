@@ -229,6 +229,7 @@ pub fn parse_listing(base: &Url, html: &str) -> Vec<Entry> {
     result
 }
 
+#[derive(Clone)]
 pub struct Repository {
     client: Client,
     credentials: Vec<Credentials>,
@@ -255,12 +256,52 @@ impl Repository {
         });
     }
     pub fn fetch(&self, url: &Url) -> Result<Vec<u8>, FetchError> {
-        self.fetch_with_accept(url, None)
+        self.fetch_with_accept(url, None, MAX_BYTES, None)
     }
     pub fn fetch_github_script(&self, url: &Url) -> Result<Vec<u8>, FetchError> {
-        self.fetch_with_accept(url, Some("application/vnd.github.raw+json"))
+        self.fetch_with_accept(
+            url,
+            Some("application/vnd.github.raw+json"),
+            MAX_BYTES,
+            None,
+        )
     }
-    fn fetch_with_accept(&self, url: &Url, accept: Option<&str>) -> Result<Vec<u8>, FetchError> {
+    pub fn fetch_description(&self, url: &Url) -> Result<Vec<u8>, FetchError> {
+        const LIMIT: u64 = 32 * 1024;
+        if url.scheme() == "file" {
+            let path = url
+                .to_file_path()
+                .map_err(|_| FetchError::Message("Chemin invalide.".into()))?;
+            let metadata =
+                std::fs::symlink_metadata(&path).map_err(|e| FetchError::Message(e.to_string()))?;
+            if !metadata.file_type().is_file() || metadata.len() > LIMIT {
+                return Err(FetchError::Message(
+                    "Description indisponible ou trop volumineuse (32 Kio maximum).".into(),
+                ));
+            }
+            let file = std::fs::File::open(path).map_err(|e| FetchError::Message(e.to_string()))?;
+            let mut bytes = Vec::new();
+            file.take(LIMIT + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| FetchError::Message(e.to_string()))?;
+            if bytes.len() as u64 > LIMIT {
+                return Err(FetchError::Message(
+                    "Description trop volumineuse (32 Kio maximum).".into(),
+                ));
+            }
+            Ok(bytes)
+        } else {
+            let accept = is_github_api(url).then_some("application/vnd.github.raw+json");
+            self.fetch_with_accept(url, accept, LIMIT, Some(Duration::from_secs(5)))
+        }
+    }
+    fn fetch_with_accept(
+        &self,
+        url: &Url,
+        accept: Option<&str>,
+        limit: u64,
+        timeout: Option<Duration>,
+    ) -> Result<Vec<u8>, FetchError> {
         let auth = self
             .credentials
             .iter()
@@ -275,6 +316,9 @@ impl Repository {
             ));
         }
         let mut request = self.client.get(github_request_url(url));
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
+        }
         if let Some(accept) = accept {
             request = request.header("Accept", accept);
         }
@@ -293,20 +337,22 @@ impl Repository {
                 response.status()
             )));
         }
-        if response.content_length().is_some_and(|n| n > MAX_BYTES) {
-            return Err(FetchError::Message(
-                "Fichier trop volumineux (4 Mio maximum).".into(),
-            ));
+        if response.content_length().is_some_and(|n| n > limit) {
+            return Err(FetchError::Message(format!(
+                "Fichier trop volumineux ({} Kio maximum).",
+                limit / 1024
+            )));
         }
         let mut data = Vec::new();
         response
-            .take(MAX_BYTES + 1)
+            .take(limit + 1)
             .read_to_end(&mut data)
             .map_err(|e| FetchError::Message(format!("Lecture impossible : {e}")))?;
-        if data.len() as u64 > MAX_BYTES {
-            return Err(FetchError::Message(
-                "Fichier trop volumineux (4 Mio maximum).".into(),
-            ));
+        if data.len() as u64 > limit {
+            return Err(FetchError::Message(format!(
+                "Fichier trop volumineux ({} Kio maximum).",
+                limit / 1024
+            )));
         }
         Ok(data)
     }
@@ -315,6 +361,63 @@ impl Repository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn descriptions_respect_basic_auth_and_size_limit() {
+        use std::{
+            io::{BufRead, BufReader, Write},
+            net::TcpListener,
+            thread,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for size in [2usize, 32 * 1024 + 1] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = String::new();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" || line.is_empty() {
+                        break;
+                    }
+                    request.push_str(&line);
+                }
+                requests.push(request);
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+                let _ = stream.write_all(&vec![b'a'; size]);
+            }
+            requests
+        });
+        let mut repo = Repository::new().unwrap();
+        let base = Url::parse(&format!("http://{addr}/private/")).unwrap();
+        repo.authenticate(base.clone(), "user".into(), "secret".into());
+        assert!(
+            matches!(repo.fetch_description(&base.join("a.txt").unwrap()), Ok(bytes) if bytes == b"aa")
+        );
+        assert!(repo
+            .fetch_description(&base.join("large.txt").unwrap())
+            .is_err());
+        let requests = server.join().unwrap();
+        assert!(requests
+            .iter()
+            .all(|r| r.to_ascii_lowercase().contains("authorization: basic ")));
+    }
+
+    #[test]
+    fn local_descriptions_are_size_limited() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.txt");
+        std::fs::write(&path, vec![b'a'; 32 * 1024 + 1]).unwrap();
+        let url = Url::from_file_path(path).unwrap();
+        assert!(Repository::new().unwrap().fetch_description(&url).is_err());
+    }
+
     #[test]
     fn github_repository_and_children_are_constrained_to_the_contents_api() {
         let root = github_url("https://github.com/community-scripts/ProxmoxVE").unwrap();

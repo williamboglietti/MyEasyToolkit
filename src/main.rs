@@ -1,3 +1,4 @@
+mod description;
 mod repository;
 
 use crossterm::{
@@ -21,8 +22,12 @@ use repository::{
     Entry, FetchError, Repository,
 };
 use std::{
+    collections::HashMap,
     io::{self, Write},
+    path::PathBuf,
     process::Command,
+    sync::Arc,
+    time::Duration,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use url::Url;
@@ -225,8 +230,65 @@ type ScriptRunner<'a> = dyn FnMut(&Entry, &[u8], bool) -> Result<(), String> + '
 
 fn is_script(entry: &Entry) -> bool {
     !entry.directory
-        && (entry.name.to_ascii_lowercase().ends_with(".sh")
-            || entry.name.to_ascii_lowercase().ends_with(".ps1"))
+        && (description::leaf(entry)
+            .to_ascii_lowercase()
+            .ends_with(".sh")
+            || description::leaf(entry)
+                .to_ascii_lowercase()
+                .ends_with(".ps1"))
+}
+
+#[derive(Clone, Debug, Default)]
+struct Interpreters {
+    bash: Option<PathBuf>,
+    powershell: Option<PathBuf>,
+}
+impl Interpreters {
+    fn detect() -> Self {
+        let paths: Vec<PathBuf> = std::env::var_os("PATH")
+            .map(|v| std::env::split_paths(&v).collect())
+            .unwrap_or_default();
+        let bash = if cfg!(windows) {
+            &["bash.exe"][..]
+        } else {
+            &["bash"][..]
+        };
+        let powershell = if cfg!(windows) {
+            &["pwsh.exe", "powershell.exe"][..]
+        } else {
+            &["pwsh", "powershell"][..]
+        };
+        Self {
+            bash: find_program(&paths, bash),
+            powershell: find_program(&paths, powershell),
+        }
+    }
+    fn supports(&self, entry: &Entry) -> bool {
+        let name = description::leaf(entry).to_ascii_lowercase();
+        !entry.directory
+            && ((name.ends_with(".sh") && self.bash.is_some())
+                || (name.ends_with(".ps1") && self.powershell.is_some()))
+    }
+}
+fn find_program(paths: &[PathBuf], names: &[&str]) -> Option<PathBuf> {
+    for name in names {
+        for path in paths {
+            let candidate = path.join(name);
+            if let Ok(meta) = candidate.metadata() {
+                #[cfg(unix)]
+                let executable = {
+                    use std::os::unix::fs::PermissionsExt;
+                    meta.permissions().mode() & 0o111 != 0
+                };
+                #[cfg(not(unix))]
+                let executable = true;
+                if meta.is_file() && executable {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
 }
 
 struct App {
@@ -234,6 +296,14 @@ struct App {
     root: Option<Url>,
     current: Option<Url>,
     entries: Vec<Entry>,
+    all_entries: Vec<Entry>,
+    interpreters: Interpreters,
+    show_all: bool,
+    descriptions: HashMap<Url, Result<String, String>>,
+    loader: description::Loader,
+    description_generation: u64,
+    description_focus: Option<Url>,
+    description_scroll: usize,
     state: ListState,
     mode: Mode,
     input: Input,
@@ -251,6 +321,14 @@ impl App {
             root: None,
             current: None,
             entries: vec![],
+            all_entries: vec![],
+            interpreters: Interpreters::detect(),
+            show_all: false,
+            descriptions: HashMap::new(),
+            loader: description::Loader::new(),
+            description_generation: 0,
+            description_focus: None,
+            description_scroll: 0,
             state: ListState::default(),
             mode: Mode::Url,
             input: Input::default(),
@@ -286,7 +364,7 @@ impl App {
         match result {
             Ok((data, local_entries)) => match action {
                 Action::Open(url) | Action::OpenRoot(url) => {
-                    self.entries = if let Some(entries) = local_entries {
+                    self.all_entries = if let Some(entries) = local_entries {
                         entries
                     } else if is_github_api(&url) {
                         match parse_github_listing(&url, &data) {
@@ -303,7 +381,9 @@ impl App {
                     if is_new_root || self.root.is_none() {
                         self.root = Some(url);
                     }
-                    self.state.select((!self.entries.is_empty()).then_some(0));
+                    self.state.select(None);
+                    self.apply_filter();
+                    self.load_descriptions();
                     self.input.clear();
                     self.message.clear();
                     self.mode = Mode::Browsing;
@@ -334,6 +414,102 @@ impl App {
                 Action::RunBatch(entry) => self.finish_batch_step(&entry, Err(e)),
                 _ => self.error(e),
             },
+        }
+    }
+    fn apply_filter(&mut self) {
+        let selected = self
+            .state
+            .selected()
+            .and_then(|i| self.entries.get(i))
+            .map(|entry| entry.url.clone());
+        self.entries = self
+            .all_entries
+            .iter()
+            .filter(|entry| {
+                if description::protected(entry) {
+                    return false;
+                }
+                if self.show_all {
+                    return true;
+                }
+                let hidden =
+                    entry.name.starts_with('.') || description::leaf(entry).starts_with('.');
+                !hidden && (entry.directory || self.interpreters.supports(entry))
+            })
+            .cloned()
+            .collect();
+        self.state.select(
+            selected
+                .and_then(|url| self.entries.iter().position(|entry| entry.url == url))
+                .or_else(|| (!self.entries.is_empty()).then_some(0)),
+        );
+        self.description_focus = None;
+        self.description_scroll = 0;
+    }
+    fn load_descriptions(&mut self) {
+        self.description_generation = self.description_generation.wrapping_add(1);
+        self.descriptions.clear();
+        self.description_focus = None;
+        self.description_scroll = 0;
+        let mut urls = Vec::new();
+        for entry in &self.entries {
+            if is_script(entry) && !description::protected(entry) {
+                if let Some(sidecar) = description::sidecar(entry, &self.all_entries) {
+                    if !urls.contains(&sidecar.url) {
+                        urls.push(sidecar.url.clone());
+                    }
+                }
+            }
+        }
+        let _ = self.loader.requests.send(description::Request::Replace(
+            self.description_generation,
+            Arc::new(self.repo.clone()),
+            urls,
+        ));
+    }
+    fn update_descriptions(&mut self) {
+        while let Ok((generation, url, result)) = self.loader.results.try_recv() {
+            if generation == self.description_generation {
+                self.descriptions.insert(url, result);
+            }
+        }
+        let focus = self
+            .state
+            .selected()
+            .and_then(|i| self.entries.get(i))
+            .map(|entry| entry.url.clone());
+        if focus != self.description_focus {
+            self.description_focus = focus;
+            self.description_scroll = 0;
+            if let Some(entry) = self.state.selected().and_then(|i| self.entries.get(i)) {
+                if let Some(sidecar) = description::sidecar(entry, &self.all_entries) {
+                    let _ = self.loader.requests.send(description::Request::Prioritize(
+                        self.description_generation,
+                        sidecar.url.clone(),
+                    ));
+                }
+            }
+        }
+    }
+    fn description(&self, entry: &Entry) -> Option<&Result<String, String>> {
+        let sidecar = description::sidecar(entry, &self.all_entries)?;
+        self.descriptions.get(&sidecar.url)
+    }
+    fn description_text(&self) -> String {
+        let Some(entry) = self.state.selected().and_then(|i| self.entries.get(i)) else {
+            return "Sélectionnez un script pour afficher sa description.".into();
+        };
+        if !is_script(entry) {
+            return "Sélectionnez un script pour afficher sa description.".into();
+        }
+        if description::sidecar(entry, &self.all_entries).is_none() {
+            return "Aucune description associée à ce script.".into();
+        }
+        match self.description(entry) {
+            Some(Ok(text)) if text.is_empty() => "La description est vide.".into(),
+            Some(Ok(text)) => text.clone(),
+            Some(Err(error)) => error.clone(),
+            None => "Chargement de la description…".into(),
         }
     }
     fn toggle_script(&mut self) {
@@ -515,6 +691,17 @@ impl App {
                 KeyCode::Enter | KeyCode::Right => self.select(),
                 KeyCode::Char(' ') => self.toggle_script(),
                 KeyCode::Char('x') => self.confirm_batch(),
+                KeyCode::Char('t') => {
+                    self.show_all = !self.show_all;
+                    self.apply_filter();
+                    self.load_descriptions();
+                }
+                KeyCode::PageUp => {
+                    self.description_scroll = self.description_scroll.saturating_sub(3)
+                }
+                KeyCode::PageDown => {
+                    self.description_scroll = self.description_scroll.saturating_add(3)
+                }
                 KeyCode::Char('c') => self.selected_scripts.clear(),
                 KeyCode::Char('e') => self.stop_on_error = !self.stop_on_error,
                 KeyCode::Backspace | KeyCode::Left => self.parent(),
@@ -580,6 +767,7 @@ impl App {
                     };
                     self.repo.authenticate(scope, username, password);
                     self.action(action);
+                    self.load_descriptions();
                 }
                 KeyCode::Esc => {
                     self.cancel_auth();
@@ -625,7 +813,9 @@ impl App {
 }
 
 fn execute_script(entry: &Entry, data: &[u8]) -> Result<(), String> {
-    let is_ps = entry.name.to_ascii_lowercase().ends_with(".ps1");
+    let is_ps = description::leaf(entry)
+        .to_ascii_lowercase()
+        .ends_with(".ps1");
     let local_path = entry.url.to_file_path().ok();
     let mut temporary = if local_path.is_none() {
         let mut file = tempfile::Builder::new()
@@ -644,13 +834,27 @@ fn execute_script(entry: &Entry, data: &[u8]) -> Result<(), String> {
         (_, Some(file)) => file.path(),
         _ => return Err("Chemin du script indisponible.".into()),
     };
+    let interpreters = Interpreters::detect();
+    let interpreter = if is_ps {
+        interpreters.powershell
+    } else {
+        interpreters.bash
+    }
+    .ok_or_else(|| {
+        if is_ps {
+            "PowerShell est introuvable."
+        } else {
+            "Bash est introuvable."
+        }
+        .to_string()
+    })?;
     let status = if is_ps {
-        Command::new(if cfg!(windows) { "powershell" } else { "pwsh" })
+        Command::new(interpreter)
             .args(["-NoProfile", "-File"])
             .arg(script_path)
             .status()
     } else {
-        Command::new("bash").arg(script_path).status()
+        Command::new(interpreter).arg(script_path).status()
     };
     match status {
         Ok(status) if status.success() => {
@@ -713,7 +917,9 @@ struct UiAreas {
     header: Rect,
     sources: Rect,
     location: Rect,
+    filter: Rect,
     list: Rect,
+    description: Rect,
     selection: Option<Rect>,
     batch_bar: Rect,
     footer: Rect,
@@ -723,15 +929,27 @@ impl UiAreas {
         let parts = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(2),
-                Constraint::Length(2),
+                Constraint::Length(if area.height < 28 { 1 } else { 2 }),
+                Constraint::Length(if area.height < 28 { 1 } else { 2 }),
                 Constraint::Length(3),
+                Constraint::Length(1),
                 Constraint::Min(3),
+                Constraint::Length(if area.height >= 28 {
+                    7
+                } else if area.height >= 20 {
+                    5
+                } else if area.height >= 16 {
+                    4
+                } else if area.height >= 11 {
+                    3
+                } else {
+                    0
+                }),
                 Constraint::Length(2),
                 Constraint::Length(2),
             ])
             .split(area);
-        let (list, selection) = if parts[3].width >= 92 && parts[3].height >= 8 {
+        let (list, selection) = if parts[4].width >= 92 && parts[4].height >= 8 {
             let columns = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
@@ -739,19 +957,21 @@ impl UiAreas {
                     Constraint::Length(1),
                     Constraint::Length(30),
                 ])
-                .split(parts[3]);
+                .split(parts[4]);
             (columns[0], Some(columns[2]))
         } else {
-            (parts[3], None)
+            (parts[4], None)
         };
         Self {
             header: parts[0],
             sources: parts[1],
             location: parts[2],
+            filter: parts[3],
             list,
+            description: parts[5],
             selection,
-            batch_bar: parts[4],
-            footer: parts[5],
+            batch_bar: parts[6],
+            footer: parts[7],
         }
     }
 }
@@ -792,6 +1012,29 @@ fn compact_location(text: &str, width: usize) -> String {
         prefix,
         suffix.into_iter().rev().collect::<String>()
     )
+}
+fn wrap_description(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![];
+    }
+    let mut lines = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut line = String::new();
+        let mut used = 0;
+        for c in paragraph.chars() {
+            let w = UnicodeWidthChar::width(c).unwrap_or(0);
+            if used + w > width && !line.is_empty() {
+                lines.push(std::mem::take(&mut line));
+                used = 0;
+            }
+            if w <= width {
+                line.push(c);
+                used += w;
+            }
+        }
+        lines.push(line);
+    }
+    lines
 }
 fn popup_area(area: Rect) -> Rect {
     let width = area.width.saturating_sub(2).min(76);
@@ -918,6 +1161,12 @@ fn draw(frame: &mut Frame, app: &mut App) {
             );
         }
     }
+    let filter = if app.show_all {
+        " [t Filtre]  Tous les fichiers"
+    } else {
+        " [t Filtre]  Compatibles"
+    };
+    frame.render_widget(Paragraph::new(filter), areas.filter);
     let items: Vec<ListItem> = app
         .entries
         .iter()
@@ -937,7 +1186,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
             } else {
                 "      ".to_string()
             };
-            ListItem::new(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(selection, Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(
                     kind,
@@ -948,7 +1197,26 @@ fn draw(frame: &mut Frame, app: &mut App) {
                     },
                 ),
                 Span::raw(&entry.name),
-            ]))
+            ];
+            if areas.list.width >= 55 {
+                if let Some(Ok(text)) = app.description(entry) {
+                    if let Some(summary) = text.lines().find(|line| !line.trim().is_empty()) {
+                        let used = UnicodeWidthStr::width(entry.name.as_str()) + 12;
+                        let column = (usize::from(areas.list.width) * 2 / 5).max(28);
+                        if used < column {
+                            spans.push(Span::raw(" ".repeat(column - used)));
+                            spans.push(Span::styled(
+                                compact_location(
+                                    summary,
+                                    usize::from(areas.list.width).saturating_sub(column + 3),
+                                ),
+                                Style::default().fg(Color::Gray),
+                            ));
+                        }
+                    }
+                }
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
     let list_title = if areas.list.width < 55 {
@@ -975,6 +1243,42 @@ fn draw(frame: &mut Frame, app: &mut App) {
         )
         .highlight_symbol("›");
     frame.render_stateful_widget(list, areas.list, &mut app.state);
+    let description_title = if areas.description.width >= 44 {
+        " Description · Pg↑/Pg↓ · [↑] [↓] "
+    } else {
+        " Description [↑] [↓] "
+    };
+    frame.render_widget(
+        Block::default()
+            .title(description_title)
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::DarkGray)),
+        areas.description,
+    );
+    if areas.description.width > 2 && areas.description.height > 2 {
+        let inner = Rect::new(
+            areas.description.x + 1,
+            areas.description.y + 1,
+            areas.description.width - 2,
+            areas.description.height - 2,
+        );
+        let lines = wrap_description(&app.description_text(), usize::from(inner.width));
+        app.description_scroll = app
+            .description_scroll
+            .min(lines.len().saturating_sub(usize::from(inner.height)));
+        frame.render_widget(
+            Paragraph::new(
+                lines
+                    .into_iter()
+                    .skip(app.description_scroll)
+                    .take(usize::from(inner.height))
+                    .map(Line::raw)
+                    .collect::<Vec<_>>(),
+            ),
+            inner,
+        );
+    }
     if let Some(panel) = areas.selection {
         frame.render_widget(
             Block::default()
@@ -1248,12 +1552,48 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
         MouseEventKind::ScrollUp if matches!(app.mode, Mode::ConfirmBatch) => {
             app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         }
+        MouseEventKind::ScrollDown
+            if matches!(app.mode, Mode::Browsing)
+                && contains(areas.description, mouse.column, mouse.row) =>
+        {
+            app.description_scroll = app.description_scroll.saturating_add(3)
+        }
+        MouseEventKind::ScrollUp
+            if matches!(app.mode, Mode::Browsing)
+                && contains(areas.description, mouse.column, mouse.row) =>
+        {
+            app.description_scroll = app.description_scroll.saturating_sub(3)
+        }
         MouseEventKind::ScrollDown if matches!(app.mode, Mode::Browsing) => app.move_selection(1),
         MouseEventKind::ScrollUp if matches!(app.mode, Mode::Browsing) => app.move_selection(-1),
         MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
             let x = mouse.column;
             let y = mouse.row;
             if matches!(app.mode, Mode::Browsing)
+                && y == areas.filter.y
+                && x > areas.filter.x
+                && x < areas.filter.x.saturating_add(11).min(areas.filter.right())
+            {
+                app.show_all = !app.show_all;
+                app.apply_filter();
+                app.load_descriptions();
+            } else if matches!(app.mode, Mode::Browsing)
+                && y == areas.description.y
+                && areas.description.width >= 22
+            {
+                let title = if areas.description.width >= 44 {
+                    " Description · Pg↑/Pg↓ · [↑] [↓] "
+                } else {
+                    " Description [↑] [↓] "
+                };
+                let up = UnicodeWidthStr::width(title.split("[↑]").next().unwrap_or("")) as u16;
+                let relative = x.saturating_sub(areas.description.x + 1);
+                if relative >= up && relative < up + 3 {
+                    app.description_scroll = app.description_scroll.saturating_sub(3);
+                } else if relative >= up + 4 && relative < up + 7 {
+                    app.description_scroll = app.description_scroll.saturating_add(3);
+                }
+            } else if matches!(app.mode, Mode::Browsing)
                 && areas.batch_bar.height > 0
                 && y == areas.batch_bar.y
             {
@@ -1375,13 +1715,14 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
             {
                 let index = app.state.offset() + usize::from(y - areas.list.y - 1);
                 if index < app.entries.len() {
+                    let already_focused = app.state.selected() == Some(index);
                     app.state.select(Some(index));
                     if x >= areas.list.x + 2
                         && x <= areas.list.x + 6
                         && is_script(&app.entries[index])
                     {
                         app.toggle_script();
-                    } else {
+                    } else if app.entries[index].directory || already_focused {
                         app.select();
                     }
                 }
@@ -1493,7 +1834,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.advance_batch();
                 continue;
             }
+            app.update_descriptions();
             terminal.draw(|f| draw(f, &mut app))?;
+            if !event::poll(Duration::from_millis(100))? {
+                continue;
+            }
             match event::read()? {
                 Event::Key(key) if key.kind == event::KeyEventKind::Press => {
                     if !app.key(key) {
@@ -1545,6 +1890,101 @@ mod input_tests {
     }
 
     #[test]
+    fn filter_and_descriptions_work_with_mouse_and_keyboard() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let dir = tempfile::tempdir().unwrap();
+        for (name, contents) in [
+            ("alpha.sh", "echo ok"),
+            (
+                "alpha.txt",
+                "Résumé\nUne ligne\nDeux lignes\nTrois lignes\nQuatre lignes\nFin",
+            ),
+            ("windows.ps1", ""),
+            (".htaccess", "private"),
+            (".htpasswd", "private"),
+            ("autre.md", ""),
+        ] {
+            std::fs::write(dir.path().join(name), contents).unwrap();
+        }
+        let mut app = App::new().unwrap();
+        app.interpreters = Interpreters {
+            bash: Some(PathBuf::from("bash")),
+            powershell: None,
+        };
+        app.action(Action::OpenRoot(
+            Url::from_directory_path(dir.path()).unwrap(),
+        ));
+        assert_eq!(
+            app.entries
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha.sh"]
+        );
+        for _ in 0..100 {
+            app.update_descriptions();
+            if app.description_text().starts_with("Résumé") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(app.description_text().contains("Fin"));
+        let screen = Rect::new(0, 0, 60, 24);
+        let areas = UiAreas::new(screen);
+        let mut terminal = Terminal::new(TestBackend::new(60, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        key(&mut app, KeyCode::PageDown);
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        assert!(app.description_scroll > 0);
+        let wheel = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: areas.description.x + 1,
+            row: areas.description.y + 1,
+            modifiers: KeyModifiers::NONE,
+        };
+        mouse(&mut app, wheel, screen);
+        assert_eq!(app.description_scroll, 0);
+        let down_button = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: areas.description.x
+                + 1
+                + UnicodeWidthStr::width(" Description · Pg↑/Pg↓ · [↑] ") as u16,
+            row: areas.description.y,
+            modifiers: KeyModifiers::NONE,
+        };
+        mouse(&mut app, down_button, screen);
+        assert_eq!(app.description_scroll, 3);
+        let before = app.state.selected();
+        mouse(&mut app, wheel, screen);
+        assert_eq!(app.state.selected(), before);
+        assert_eq!(app.description_scroll, 0);
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: areas.filter.x + 2,
+            row: areas.filter.y,
+            modifiers: KeyModifiers::NONE,
+        };
+        mouse(&mut app, click, screen);
+        assert!(app.show_all);
+        let names: Vec<_> = app.entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"alpha.txt")
+                && names.contains(&"windows.ps1")
+                && names.contains(&"autre.md")
+        );
+        assert!(!names.contains(&".htaccess") && !names.contains(&".htpasswd"));
+        key(&mut app, KeyCode::Char('t'));
+        assert_eq!(app.entries.len(), 1);
+    }
+
+    #[test]
+    fn description_wrap_is_bounded_and_preserves_all_text() {
+        assert_eq!(wrap_description("abcde\nfin", 3), ["abc", "de", "fin"]);
+        assert_eq!(wrap_description("界界", 2), ["界", "界"]);
+        assert!(wrap_description("test", 0).is_empty());
+    }
+
+    #[test]
     fn long_locations_keep_the_end_and_fit_the_available_cells() {
         let path = "https://example.com/long/chemin/界/résultat.sh";
         for width in 0..=50 {
@@ -1572,12 +2012,12 @@ mod input_tests {
             app.selected_scripts.push(entry);
         }
         app.state.select(Some(0));
-        let wide = UiAreas::new(Rect::new(0, 0, 110, 24));
+        let wide = UiAreas::new(Rect::new(0, 0, 110, 30));
         let narrow = UiAreas::new(Rect::new(0, 0, 60, 24));
         let panel = wide.selection.expect("wide terminal has a selection panel");
         assert!(wide.list.right() < panel.x);
         assert!(narrow.selection.is_none());
-        let mut terminal = Terminal::new(TestBackend::new(110, 24)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(110, 30)).unwrap();
         terminal.draw(|frame| draw(frame, &mut app)).unwrap();
         let buffer = terminal.backend().buffer();
         let row = |y| {
@@ -1637,6 +2077,7 @@ mod input_tests {
         }
         std::fs::write(dir.path().join("sub/c.ps1"), "").unwrap();
         let mut app = App::new().unwrap();
+        app.interpreters.bash = Some(PathBuf::from("bash"));
         app.action(Action::OpenRoot(
             Url::from_directory_path(dir.path()).unwrap(),
         ));
@@ -1670,6 +2111,9 @@ mod input_tests {
         );
         app.state.select(Some(0));
         key(&mut app, KeyCode::Enter);
+        if app.interpreters.powershell.is_none() {
+            key(&mut app, KeyCode::Char('t'));
+        }
         key(&mut app, KeyCode::Char(' '));
         assert_eq!(
             app.selected_scripts
@@ -1981,6 +2425,7 @@ mod input_tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("child")).unwrap();
         let mut app = App::new().unwrap();
+        app.interpreters.bash = Some(PathBuf::from("bash"));
         app.action(Action::OpenRoot(
             Url::from_directory_path(dir.path()).unwrap(),
         ));
@@ -2022,6 +2467,7 @@ mod input_tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("test.sh"), "exit 0").unwrap();
         let mut app = App::new().unwrap();
+        app.interpreters.bash = Some(PathBuf::from("bash"));
         app.action(Action::OpenRoot(
             Url::from_directory_path(dir.path()).unwrap(),
         ));
