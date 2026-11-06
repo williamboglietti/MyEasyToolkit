@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools
+          sudo apt-get install -y musl-tools apt-utils
           if [[ "${{ runner.arch }}" == "ARM64" ]]; then
             echo "TARGET=aarch64-unknown-linux-musl" >> "$GITHUB_ENV"
           else
@@ -48,6 +48,10 @@ jobs:
         run: |
           sudo apt-get install -y ./dist/*.deb
           myeasytoolkit --version
+      - name: Verify signed APT repository
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash tests/apt-repository.sh
       - name: Upload Debian package
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
