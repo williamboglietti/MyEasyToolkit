@@ -60,4 +60,7 @@ mkdir -p "$work_dir/unpacked" "$HOME/.local/bin"
 tar -xzf "$work_dir/$file" -C "$work_dir/unpacked"
 install -m 755 "$work_dir/unpacked/myeasytoolkit" "$HOME/.local/bin/myeasytoolkit"
 echo 'Installation terminée : ~/.local/bin/myeasytoolkit'
-echo 'Ajoutez ~/.local/bin à votre PATH si nécessaire.'
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) printf '%s\n' "Pour cette session, exécutez : export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+esac
