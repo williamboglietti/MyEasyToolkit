@@ -13,7 +13,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
     Frame, Terminal,
 };
 use repository::{
@@ -714,6 +714,7 @@ struct UiAreas {
     sources: Rect,
     location: Rect,
     list: Rect,
+    selection: Option<Rect>,
     batch_bar: Rect,
     footer: Rect,
 }
@@ -730,15 +731,67 @@ impl UiAreas {
                 Constraint::Length(2),
             ])
             .split(area);
+        let (list, selection) = if parts[3].width >= 92 && parts[3].height >= 8 {
+            let columns = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Min(45),
+                    Constraint::Length(1),
+                    Constraint::Length(30),
+                ])
+                .split(parts[3]);
+            (columns[0], Some(columns[2]))
+        } else {
+            (parts[3], None)
+        };
         Self {
             header: parts[0],
             sources: parts[1],
             location: parts[2],
-            list: parts[3],
+            list,
+            selection,
             batch_bar: parts[4],
             footer: parts[5],
         }
     }
+}
+
+// Keep the end of long locations visible without splitting UTF-8 characters.
+fn compact_location(text: &str, width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= width {
+        return text.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let available = width - 1;
+    let prefix_width = available / 3;
+    let suffix_width = available - prefix_width;
+    let mut prefix = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let w = UnicodeWidthChar::width(c).unwrap_or(0);
+        if used + w > prefix_width {
+            break;
+        }
+        prefix.push(c);
+        used += w;
+    }
+    let mut suffix = Vec::new();
+    used = 0;
+    for c in text.chars().rev() {
+        let w = UnicodeWidthChar::width(c).unwrap_or(0);
+        if used + w > suffix_width {
+            break;
+        }
+        suffix.push(c);
+        used += w;
+    }
+    format!(
+        "{}…{}",
+        prefix,
+        suffix.into_iter().rev().collect::<String>()
+    )
 }
 fn popup_area(area: Rect) -> Rect {
     let width = area.width.saturating_sub(2).min(76);
@@ -765,16 +818,21 @@ fn contains(area: Rect, x: u16, y: u16) -> bool {
 }
 fn draw(frame: &mut Frame, app: &mut App) {
     let areas = UiAreas::new(frame.area());
-    let accent = Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::BOLD);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(" MyEasyToolkit ", accent),
-            Span::styled("  Navigateur de scripts", Style::default().fg(Color::Gray)),
-        ])),
-        areas.header,
-    );
+    let accent = Style::default().add_modifier(Modifier::BOLD);
+    let heading = " MyEasyToolkit  /  vos scripts en un seul endroit";
+    let mut header = vec![Span::styled(" MyEasyToolkit", accent)];
+    if areas.header.width >= 50 {
+        header.push(Span::raw("  /  vos scripts en un seul endroit"));
+    }
+    if areas.header.width >= 72 {
+        let version = format!("v{}  ", env!("CARGO_PKG_VERSION"));
+        let gap = usize::from(areas.header.width).saturating_sub(
+            UnicodeWidthStr::width(heading) + UnicodeWidthStr::width(version.as_str()),
+        );
+        header.push(Span::raw(" ".repeat(gap)));
+        header.push(Span::styled(version, Style::default()));
+    }
+    frame.render_widget(Paragraph::new(Line::from(header)), areas.header);
     let active = if matches!(app.mode, Mode::Url) {
         app.input_source
     } else {
@@ -787,21 +845,29 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default()
         }
     };
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw(" "),
-            Span::styled("[1 Local]", source_style(Source::Local)),
-            Span::raw("  "),
-            Span::styled("[2 HTTP]", source_style(Source::Http)),
-            Span::raw("  "),
-            Span::styled("[3 GitHub]", source_style(Source::Github)),
-            Span::styled("    Source", Style::default().fg(Color::Gray)),
-        ])),
-        areas.sources,
-    );
+    let source_labels = if areas.sources.width < 28 {
+        ["[1 L]", "[2 H]", "[3 G]"]
+    } else if areas.sources.width < 32 {
+        ["[1 Local]", "[2 HTTP]", "[3 Git]"]
+    } else {
+        ["[1 Local]", "[2 HTTP]", "[3 GitHub]"]
+    };
+    let source_gap = if areas.sources.width < 32 { " " } else { "  " };
+    let mut sources = vec![
+        Span::raw(" "),
+        Span::styled(source_labels[0], source_style(Source::Local)),
+        Span::raw(source_gap),
+        Span::styled(source_labels[1], source_style(Source::Http)),
+        Span::raw(source_gap),
+        Span::styled(source_labels[2], source_style(Source::Github)),
+    ];
+    if areas.sources.width >= 55 {
+        sources.push(Span::styled("    Choisir une source", Style::default()));
+    }
+    frame.render_widget(Paragraph::new(Line::from(sources)), areas.sources);
     let editing = matches!(app.mode, Mode::Url);
     let title = if editing {
         if app.input_source == Source::Github {
@@ -809,13 +875,20 @@ fn draw(frame: &mut Frame, app: &mut App) {
         } else {
             " Adresse HTTP · Entrée pour ouvrir "
         }
+    } else if app
+        .current
+        .as_ref()
+        .is_some_and(|url| source_for(url) != Source::Local)
+    {
+        " Emplacement · cliquer pour modifier "
     } else {
-        " Emplacement "
+        " Emplacement actuel "
     };
     frame.render_widget(
         Block::default()
             .title(title)
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .border_style(if editing {
                 accent
             } else {
@@ -839,14 +912,23 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 .current
                 .as_ref()
                 .map_or_else(|| "Choisissez une source".to_string(), location_label);
-            frame.render_widget(Paragraph::new(text), field);
+            frame.render_widget(
+                Paragraph::new(compact_location(&text, field.width as usize)),
+                field,
+            );
         }
     }
     let items: Vec<ListItem> = app
         .entries
         .iter()
         .map(|entry| {
-            let kind = if entry.directory { "[D] " } else { "[F] " };
+            let kind = if entry.directory {
+                "[D] "
+            } else if is_script(entry) {
+                "[S] "
+            } else {
+                "[F] "
+            };
             let selection = if is_script(entry) {
                 app.selected_scripts
                     .iter()
@@ -856,59 +938,165 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 "      ".to_string()
             };
             ListItem::new(Line::from(vec![
-                Span::styled(selection, Style::default().fg(Color::Yellow)),
-                Span::styled(kind, Style::default().fg(Color::Cyan)),
+                Span::styled(selection, Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    kind,
+                    if entry.directory {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    },
+                ),
                 Span::raw(&entry.name),
             ]))
         })
         .collect();
+    let list_title = if areas.list.width < 55 {
+        format!(" Contenu · {} ", app.entries.len())
+    } else {
+        format!(
+            " Contenu · {} élément(s) · [D] dossier · [S] script ",
+            app.entries.len()
+        )
+    };
     let list = List::new(items)
         .block(
             Block::default()
-                .title(" Fichiers · [D] dossier  [F] fichier  [ ] sélectionner ")
+                .title(list_title)
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Gray)),
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::DarkGray)),
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(Color::Black)
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("›");
     frame.render_stateful_widget(list, areas.list, &mut app.state);
+    if let Some(panel) = areas.selection {
+        frame.render_widget(
+            Block::default()
+                .title(format!(" Sélection · {} ", app.selected_scripts.len()))
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::DarkGray)),
+            panel,
+        );
+        if panel.width > 4 && panel.height > 3 {
+            let inner = Rect::new(panel.x + 2, panel.y + 1, panel.width - 4, panel.height - 2);
+            let detail_height = if inner.height >= 9 { 4 } else { 0 };
+            let queue_height = inner.height.saturating_sub(detail_height);
+            let mut lines = Vec::new();
+            if app.selected_scripts.is_empty() {
+                lines.push(Line::styled(
+                    "Aucun script choisi",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ));
+                lines.push(Line::raw(""));
+                lines.push(Line::raw("Cochez un script ou"));
+                lines.push(Line::raw("utilisez Espace."));
+            } else {
+                let capacity = usize::from(queue_height);
+                let shown = if app.selected_scripts.len() > capacity {
+                    capacity.saturating_sub(1)
+                } else {
+                    capacity
+                };
+                for (index, entry) in app.selected_scripts.iter().take(shown).enumerate() {
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("{:>2}  ", index + 1),
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw(entry.name.as_str()),
+                    ]));
+                }
+                if shown < app.selected_scripts.len() {
+                    lines.push(Line::styled(
+                        format!("+ {} autre(s) · Lancer", app.selected_scripts.len() - shown),
+                        Style::default(),
+                    ));
+                }
+            }
+            frame.render_widget(
+                Paragraph::new(lines),
+                Rect::new(inner.x, inner.y, inner.width, queue_height),
+            );
+            if detail_height > 0 {
+                let entry = app
+                    .state
+                    .selected()
+                    .and_then(|index| app.entries.get(index));
+                let mut details = vec![Line::styled(
+                    "Élément actif",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )];
+                if let Some(entry) = entry {
+                    details.push(Line::raw(entry.name.as_str()));
+                    details.push(Line::raw(if entry.directory {
+                        "Dossier · Entrée : ouvrir"
+                    } else if is_script(entry) {
+                        "Script · Entrée : ouvrir"
+                    } else {
+                        "Fichier non pris en charge"
+                    }));
+                } else {
+                    details.push(Line::raw("Aucun élément"));
+                }
+                frame.render_widget(
+                    Paragraph::new(details),
+                    Rect::new(inner.x, inner.bottom() - 3, inner.width, 3),
+                );
+            }
+        }
+    }
     if app.entries.is_empty()
         && app.current.is_some()
         && areas.list.width > 2
         && areas.list.height > 2
     {
         frame.render_widget(
-            Paragraph::new("Aucun fichier ni dossier trouvé.")
-                .style(Style::default().fg(Color::Gray)),
+            Paragraph::new("Aucun fichier ni dossier trouvé.").style(Style::default()),
             Rect::new(areas.list.x + 1, areas.list.y + 1, areas.list.width - 2, 1),
         );
     }
+    let batch_actions = if areas.batch_bar.width < 38 {
+        format!(
+            " [Lancer] [Vider] {} script{}",
+            app.selected_scripts.len(),
+            if app.selected_scripts.len() > 1 {
+                "s"
+            } else {
+                ""
+            }
+        )
+    } else {
+        format!(
+            " [Lancer x] [Vider c]  {} script(s) en attente",
+            app.selected_scripts.len()
+        )
+    };
     frame.render_widget(
         Paragraph::new(vec![
-            Line::styled(
-                format!(
-                    " [Lancer x] [Vider c]  {} sélectionné(s)",
-                    app.selected_scripts.len()
-                ),
-                Style::default().fg(Color::Cyan),
-            ),
+            Line::styled(batch_actions, Style::default().add_modifier(Modifier::BOLD)),
             Line::styled(
                 format!(
                     " [{}] Arrêter si erreur (e)",
                     if app.stop_on_error { "x" } else { " " }
                 ),
-                Style::default().fg(Color::Yellow),
+                Style::default(),
             ),
         ]),
         areas.batch_bar,
     );
-    let actions = if editing {
+    let actions = if editing && areas.footer.width < 20 {
+        " [OK] [Annuler]"
+    } else if editing {
         " [Ouvrir]  [Annuler]"
+    } else if areas.footer.width < 34 {
+        " [Retour] [Maj] [Quitter]"
     } else {
         " [Retour]  [Actualiser]  [Quitter]"
     };
@@ -918,23 +1106,20 @@ fn draw(frame: &mut Frame, app: &mut App) {
         } else {
             app.message.as_str()
         }
+    } else if areas.footer.width < 38 {
+        "Espace choisir · x lancer"
     } else {
         "↑/↓ : naviguer  ·  Espace : sélectionner  ·  Entrée : ouvrir"
     };
     frame.render_widget(
         Paragraph::new(vec![
-            Line::styled(
-                actions,
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Line::styled(actions, Style::default().add_modifier(Modifier::BOLD)),
             Line::styled(
                 hint,
                 if editing && !app.message.is_empty() {
-                    Style::default().fg(Color::Red)
+                    Style::default().add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::Gray)
+                    Style::default()
                 },
             ),
         ]),
@@ -985,12 +1170,12 @@ fn draw(frame: &mut Frame, app: &mut App) {
                     "[{}] Arrêter si erreur (e)",
                     if app.stop_on_error { "x" } else { " " }
                 ))
-                .style(Style::default().fg(Color::Yellow)),
+                .style(Style::default().add_modifier(Modifier::BOLD)),
                 Rect::new(popup.x + 2, popup.bottom() - 4, width, 1),
             );
             frame.render_widget(
                 Paragraph::new("[Exécuter] [Annuler]  o / Échap · ↑/↓")
-                    .style(Style::default().fg(Color::Cyan)),
+                    .style(Style::default().add_modifier(Modifier::BOLD)),
                 Rect::new(popup.x + 2, popup.bottom() - 2, width, 1),
             );
         }
@@ -1017,8 +1202,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
             frame.set_cursor_position((x + caret as u16, y + 1));
             if popup.height >= 6 {
                 frame.render_widget(
-                    Paragraph::new("[Continuer]   [Annuler]")
-                        .style(Style::default().fg(Color::Gray)),
+                    Paragraph::new("[Continuer]   [Annuler]").style(Style::default()),
                     Rect::new(x, y + 3, inner_width, 1),
                 );
             }
@@ -1047,7 +1231,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
             if matches!(app.mode, Mode::Confirm(_)) && popup.width > 4 && popup.height >= 5 {
                 frame.render_widget(
                     Paragraph::new("[Exécuter]   [Annuler]   o / Échap")
-                        .style(Style::default().fg(Color::Cyan)),
+                        .style(Style::default().add_modifier(Modifier::BOLD)),
                     Rect::new(popup.x + 2, popup.bottom() - 2, popup.width - 4, 1),
                 );
             }
@@ -1074,16 +1258,23 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
                 && y == areas.batch_bar.y
             {
                 let col = x.saturating_sub(areas.batch_bar.x);
-                if (1..=10).contains(&col) {
+                if areas.batch_bar.width < 38 && (1..=8).contains(&col) {
                     app.confirm_batch();
-                } else if (12..=20).contains(&col) {
+                } else if areas.batch_bar.width < 38 && (10..=16).contains(&col) {
+                    app.selected_scripts.clear();
+                } else if areas.batch_bar.width >= 38 && (1..=10).contains(&col) {
+                    app.confirm_batch();
+                } else if areas.batch_bar.width >= 38 && (12..=20).contains(&col) {
                     app.selected_scripts.clear();
                 }
             } else if matches!(app.mode, Mode::Browsing)
                 && areas.batch_bar.height > 1
                 && y == areas.batch_bar.y + 1
                 && x > areas.batch_bar.x
-                && x < areas.batch_bar.right()
+                && x < areas
+                    .batch_bar
+                    .right()
+                    .min(areas.batch_bar.x.saturating_add(27))
             {
                 app.stop_on_error = !app.stop_on_error;
             } else if matches!(app.mode, Mode::Browsing | Mode::Url)
@@ -1093,11 +1284,30 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
             {
                 let col = x - areas.footer.x;
                 if matches!(app.mode, Mode::Url) {
-                    if (1..=8).contains(&col) {
-                        return app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                    if areas.footer.width < 20 {
+                        if (1..=4).contains(&col) {
+                            return app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                        }
+                        if (6..=14).contains(&col) {
+                            return app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                        }
+                    } else {
+                        if (1..=8).contains(&col) {
+                            return app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                        }
+                        if (11..=19).contains(&col) {
+                            return app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                        }
                     }
-                    if (11..=19).contains(&col) {
-                        return app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                } else if areas.footer.width < 34 {
+                    if (1..=8).contains(&col) {
+                        app.parent();
+                    } else if (10..=14).contains(&col) {
+                        if let Some(url) = app.current.clone() {
+                            app.action(Action::Open(url));
+                        }
+                    } else if (16..=24).contains(&col) {
+                        return false;
                     }
                 } else if (1..=8).contains(&col) {
                     app.parent();
@@ -1113,7 +1323,23 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
                 && x > areas.sources.x
             {
                 let col = x - areas.sources.x;
-                if (1..=9).contains(&col) {
+                if areas.sources.width < 28 {
+                    if (1..=5).contains(&col) {
+                        app.select_source(Source::Local);
+                    } else if (7..=11).contains(&col) {
+                        app.select_source(Source::Http);
+                    } else if (13..=17).contains(&col) {
+                        app.select_source(Source::Github);
+                    }
+                } else if areas.sources.width < 32 {
+                    if (1..=9).contains(&col) {
+                        app.select_source(Source::Local);
+                    } else if (11..=18).contains(&col) {
+                        app.select_source(Source::Http);
+                    } else if (20..=26).contains(&col) {
+                        app.select_source(Source::Github);
+                    }
+                } else if (1..=9).contains(&col) {
                     app.select_source(Source::Local);
                 } else if (12..=19).contains(&col) {
                     app.select_source(Source::Http);
@@ -1316,6 +1542,85 @@ mod input_tests {
 
     fn press(input: &mut Input, key: KeyCode) {
         input.key(KeyEvent::new(key, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn long_locations_keep_the_end_and_fit_the_available_cells() {
+        let path = "https://example.com/long/chemin/界/résultat.sh";
+        for width in 0..=50 {
+            let value = compact_location(path, width);
+            assert!(UnicodeWidthStr::width(value.as_str()) <= width);
+            if width >= 20 && UnicodeWidthStr::width(path) > width {
+                assert!(value.ends_with("résultat.sh"));
+                assert!(value.contains('…'));
+            }
+        }
+        assert_eq!(compact_location("court", 5), "court");
+    }
+
+    #[test]
+    fn selection_panel_adapts_to_width_and_displays_the_order() {
+        let mut app = App::new().unwrap();
+        app.mode = Mode::Browsing;
+        for name in ["premier.sh", "second.sh"] {
+            let entry = Entry {
+                name: name.into(),
+                url: Url::parse(&format!("https://example.com/{name}")).unwrap(),
+                directory: false,
+            };
+            app.entries.push(entry.clone());
+            app.selected_scripts.push(entry);
+        }
+        app.state.select(Some(0));
+        let wide = UiAreas::new(Rect::new(0, 0, 110, 24));
+        let narrow = UiAreas::new(Rect::new(0, 0, 60, 24));
+        let panel = wide.selection.expect("wide terminal has a selection panel");
+        assert!(wide.list.right() < panel.x);
+        assert!(narrow.selection.is_none());
+        let mut terminal = Terminal::new(TestBackend::new(110, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = |y| {
+            (panel.x..panel.right())
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        };
+        assert!(row(panel.y + 1).contains("premier.sh"));
+        assert!(row(panel.y + 2).contains("second.sh"));
+        assert!(row(panel.y + 1).contains('1'));
+        assert!(row(panel.y + 2).contains('2'));
+        assert!(row(panel.bottom() - 4).contains("Élément actif"));
+        assert!(row(panel.bottom() - 3).contains("premier.sh"));
+    }
+
+    #[test]
+    fn compact_controls_remain_clickable() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let click = |x, y| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        };
+        let screen = Rect::new(0, 0, 28, 18);
+        let areas = UiAreas::new(screen);
+        let mut app = App::new().unwrap();
+        mouse(&mut app, click(12, areas.sources.y), screen);
+        assert_eq!(app.input_source, Source::Http);
+        mouse(&mut app, click(22, areas.sources.y), screen);
+        assert_eq!(app.input_source, Source::Github);
+        app.mode = Mode::Browsing;
+        app.selected_scripts.push(Entry {
+            name: "test.sh".into(),
+            url: Url::parse("https://example.com/test.sh").unwrap(),
+            directory: false,
+        });
+        mouse(&mut app, click(2, areas.batch_bar.y), screen);
+        assert!(matches!(app.mode, Mode::ConfirmBatch));
+        key(&mut app, KeyCode::Esc);
+        mouse(&mut app, click(11, areas.batch_bar.y), screen);
+        assert!(app.selected_scripts.is_empty());
+        assert!(!mouse(&mut app, click(18, areas.footer.y), screen));
     }
 
     fn key(app: &mut App, code: KeyCode) {
