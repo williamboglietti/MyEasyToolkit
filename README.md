@@ -1,12 +1,22 @@
 # MyEasyToolkit
 
-Navigateur de dépôts de scripts dans le terminal. Indiquez une URL d'index HTTP(S) de type Apache, par exemple `https://mystorage.ovh/` ; parcourez les dossiers au clavier ou à la souris et confirmez avant d'exécuter un script `.sh` ou `.ps1`.
+Navigateur de scripts dans le terminal, utilisable au clavier et à la souris lorsque le terminal le permet. Au démarrage, le dossier courant est affiché. Choisissez une source en haut de l’écran :
 
-```text
+- **Local** : parcourez les fichiers de votre machine, à partir du dossier dans lequel vous avez lancé l’outil.
+- **HTTP** : saisissez l’adresse d’un index HTTP(S) de type Apache, par exemple `https://mystorage.ovh/`. L’adresse préremplie peut être modifiée pour utiliser `http://` si nécessaire.
+- **GitHub** : saisissez l’adresse d’un dépôt public, par exemple `https://github.com/community-scripts/ProxmoxVE`. La navigation utilise la branche par défaut. Les dépôts privés et les liens vers une branche ou un sous-dossier ne sont pas encore pris en charge ; GitHub limite également les requêtes non authentifiées et les listes de dossiers à 1 000 éléments.
+
+```bash
+myeasytoolkit
 myeasytoolkit https://mystorage.ovh/
+myeasytoolkit https://github.com/community-scripts/ProxmoxVE
 ```
 
-Les flèches et Entrée naviguent, Retour arrière remonte, `o` ouvre un autre dépôt, `r` actualise et `q` quitte. Les identifiants HTTP Basic sont demandés lors d'une réponse 401, restent en mémoire pendant la session et ne sont pas envoyés en HTTP (sauf sur localhost pour les tests). Les scripts `.sh` nécessitent Bash ; les scripts `.ps1` nécessitent PowerShell. L'outil exécute les scripts avec les droits de l'utilisateur courant.
+Cliquez sur une source ou utilisez les touches `1`, `2` et `3`. Cliquez sur un élément ou naviguez avec les flèches et Entrée ; Retour arrière remonte, `r` actualise et `q` quitte. Dans les champs de saisie, les flèches déplacent le curseur, Début/Fin rejoignent les extrémités et le collage du terminal est pris en charge. Une erreur de connexion laisse l’adresse modifiable.
+
+Les scripts `.sh` et `.ps1` ne sont exécutés qu’après confirmation, avec les droits de l’utilisateur courant. Les scripts locaux sont exécutés depuis leur emplacement d’origine ; les scripts distants sont téléchargés individuellement. Un script distant qui dépend d’autres fichiers du dépôt doit les récupérer lui-même. Les scripts `.sh` nécessitent Bash et les scripts `.ps1` nécessitent PowerShell.
+
+Pour les dépôts HTTP protégés, les identifiants Basic sont demandés lors d’une réponse 401, restent en mémoire pendant la session et ne sont envoyés qu’en HTTPS (sauf sur localhost pour les tests).
 
 ## Développement
 
