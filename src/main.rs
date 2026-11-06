@@ -522,9 +522,22 @@ fn run_script(entry: &Entry, data: &[u8]) -> Result<(), String> {
         Ok(status) => println!("\nScript terminé : {status}"),
         Err(e) => println!("\nImpossible de démarrer le script : {e}"),
     }
-    println!("Appuyez sur Entrée pour revenir au dépôt.");
-    let _ = io::stdin().read_line(&mut String::new());
+    println!("Cliquez ou appuyez sur Entrée pour revenir au dépôt.");
     enable_raw_mode().map_err(|e| e.to_string())?;
+    execute!(io::stdout(), EnableMouseCapture).map_err(|e| e.to_string())?;
+    loop {
+        match event::read().map_err(|e| e.to_string())? {
+            Event::Key(key)
+                if key.code == KeyCode::Enter
+                    || (key.modifiers.contains(KeyModifiers::CONTROL)
+                        && key.code == KeyCode::Char('c')) =>
+            {
+                break
+            }
+            Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Down(_)) => break,
+            _ => {}
+        }
+    }
     execute!(
         io::stdout(),
         EnterAlternateScreen,
@@ -692,23 +705,37 @@ fn draw(frame: &mut Frame, app: &mut App) {
             Rect::new(areas.list.x + 1, areas.list.y + 1, areas.list.width - 2, 1),
         );
     }
-    let footer = if editing {
+    let actions = if editing {
+        " [Ouvrir]  [Annuler]"
+    } else {
+        " [Retour]  [Actualiser]  [Quitter]"
+    };
+    let hint = if editing {
         if app.message.is_empty() {
-            " Entrée ouvrir  ·  Échap annuler  ·  ←/→ déplacer le curseur"
+            "Entrée : ouvrir  ·  Échap : annuler  ·  ←/→ : curseur"
         } else {
             app.message.as_str()
         }
     } else {
-        " ↑/↓ naviguer  ·  Entrée ouvrir  ·  ← retour  ·  r actualiser  ·  q quitter"
+        "↑/↓ : naviguer  ·  Entrée : ouvrir  ·  1/2/3 : source"
     };
     frame.render_widget(
-        Paragraph::new(footer)
-            .style(if editing && !app.message.is_empty() {
-                Style::default().fg(Color::Red)
-            } else {
-                Style::default().fg(Color::Gray)
-            })
-            .wrap(Wrap { trim: true }),
+        Paragraph::new(vec![
+            Line::styled(
+                actions,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Line::styled(
+                hint,
+                if editing && !app.message.is_empty() {
+                    Style::default().fg(Color::Red)
+                } else {
+                    Style::default().fg(Color::Gray)
+                },
+            ),
+        ]),
         areas.footer,
     );
 
@@ -740,7 +767,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
             frame.set_cursor_position((x + caret as u16, y + 1));
             if popup.height >= 6 {
                 frame.render_widget(
-                    Paragraph::new("[Continuer]   Échap : annuler")
+                    Paragraph::new("[Continuer]   [Annuler]")
                         .style(Style::default().fg(Color::Gray)),
                     Rect::new(x, y + 3, inner_width, 1),
                 );
@@ -752,10 +779,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 " Confirmer l’exécution ",
                 format!("{}\n\nExécuter ce script ?", location_label(&entry.url)),
             )),
-            Mode::Message => Some((
-                " Information ",
-                format!("{}\n\nAppuyez sur une touche.", app.message),
-            )),
+            Mode::Message => Some((" Information ", format!("{}\n\n[Fermer]", app.message))),
             _ => None,
         };
         if let Some((title, text)) = prompt {
@@ -781,7 +805,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
-fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) {
+fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool {
     let areas = UiAreas::new(area);
     match mouse.kind {
         MouseEventKind::ScrollDown if matches!(app.mode, Mode::Browsing) => app.move_selection(1),
@@ -790,6 +814,28 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) {
             let x = mouse.column;
             let y = mouse.row;
             if matches!(app.mode, Mode::Browsing | Mode::Url)
+                && areas.footer.height > 0
+                && y == areas.footer.y
+                && x >= areas.footer.x
+            {
+                let col = x - areas.footer.x;
+                if matches!(app.mode, Mode::Url) {
+                    if (1..=8).contains(&col) {
+                        return app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                    }
+                    if (11..=19).contains(&col) {
+                        return app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                    }
+                } else if (1..=8).contains(&col) {
+                    app.parent();
+                } else if (11..=22).contains(&col) {
+                    if let Some(url) = app.current.clone() {
+                        app.action(Action::Open(url));
+                    }
+                } else if (25..=33).contains(&col) {
+                    return false;
+                }
+            } else if matches!(app.mode, Mode::Browsing | Mode::Url)
                 && y == areas.sources.y
                 && x > areas.sources.x
             {
@@ -853,6 +899,13 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) {
                     && x < (popup.x + 13).min(popup.right())
                 {
                     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                } else if popup.width > 4
+                    && popup.height >= 6
+                    && y == popup.y + 4
+                    && x >= popup.x + 16
+                    && x < (popup.x + 25).min(popup.right())
+                {
+                    return app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
                 }
             } else if matches!(app.mode, Mode::Confirm(_)) {
                 let popup = popup_area(area);
@@ -869,6 +922,7 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) {
         }
         _ => {}
     }
+    true
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -935,7 +989,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     app.input.insert(&text);
                     app.message.clear();
                 }
-                Event::Mouse(event) => mouse(&mut app, event, terminal.get_frame().area()),
+                Event::Mouse(event) if !mouse(&mut app, event, terminal.get_frame().area()) => {
+                    break
+                }
                 _ => {}
             }
         }
@@ -1041,6 +1097,60 @@ mod input_tests {
             app.current.unwrap().to_file_path().unwrap(),
             dir.path().join("child")
         );
+    }
+
+    #[test]
+    fn mouse_can_open_a_source_go_back_submit_an_address_and_quit() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+        let click = |x, y| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        };
+        let screen = Rect::new(0, 0, 80, 24);
+        let areas = UiAreas::new(screen);
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("child")).unwrap();
+        let mut app = App::new().unwrap();
+        app.action(Action::OpenRoot(
+            Url::from_directory_path(dir.path()).unwrap(),
+        ));
+        assert!(mouse(&mut app, click(3, areas.list.y + 1), screen));
+        assert!(mouse(&mut app, click(2, areas.footer.y), screen));
+        assert_eq!(
+            app.current.as_ref().unwrap().to_file_path().unwrap(),
+            dir.path()
+        );
+        assert!(mouse(&mut app, click(13, areas.sources.y), screen));
+        assert_eq!(app.input.text, "https://");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            let _ = stream.read(&mut request);
+            let body = "<a href=\"script.sh\">script.sh</a>";
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+        app.input.clear();
+        app.input.insert(&format!("http://{address}/"));
+        assert!(mouse(&mut app, click(2, areas.footer.y), screen));
+        server.join().unwrap();
+        assert!(matches!(app.mode, Mode::Browsing));
+        assert_eq!(app.entries[0].name, "script.sh");
+        assert!(!mouse(&mut app, click(26, areas.footer.y), screen));
     }
 
     #[test]
