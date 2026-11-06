@@ -10,7 +10,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    backend::CrosstermBackend,
+    backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -304,6 +304,7 @@ struct App {
     description_generation: u64,
     description_focus: Option<Url>,
     description_scroll: usize,
+    screen_needs_redraw: bool,
     state: ListState,
     mode: Mode,
     input: Input,
@@ -329,6 +330,7 @@ impl App {
             description_generation: 0,
             description_focus: None,
             description_scroll: 0,
+            screen_needs_redraw: false,
             state: ListState::default(),
             mode: Mode::Url,
             input: Input::default(),
@@ -390,11 +392,13 @@ impl App {
                 }
                 Action::Run(entry) => {
                     self.mode = Mode::Browsing;
+                    self.screen_needs_redraw = true;
                     if let Err(e) = runner(&entry, &data, true) {
                         self.error(e);
                     }
                 }
                 Action::RunBatch(entry) => {
+                    self.screen_needs_redraw = true;
                     let result = runner(&entry, &data, false);
                     self.finish_batch_step(&entry, result);
                 }
@@ -1788,6 +1792,18 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
     true
 }
 
+// Returning from script execution switches back to an empty alternate screen.
+// Reset Ratatui's previous frame as well, otherwise it only paints changed cells.
+fn draw_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<()> {
+    if app.screen_needs_redraw {
+        terminal.clear()?;
+        app.screen_needs_redraw = false;
+    }
+    app.update_descriptions();
+    terminal.draw(|frame| draw(frame, app))?;
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let argument = std::env::args().nth(1);
     match argument.as_deref() {
@@ -1834,8 +1850,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app.advance_batch();
                 continue;
             }
-            app.update_descriptions();
-            terminal.draw(|f| draw(f, &mut app))?;
+            draw_app(&mut terminal, &mut app)?;
             if !event::poll(Duration::from_millis(100))? {
                 continue;
             }
@@ -1887,6 +1902,48 @@ mod input_tests {
 
     fn press(input: &mut Input, key: KeyCode) {
         input.key(KeyEvent::new(key, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn redraws_the_whole_interface_after_single_or_batch_execution() {
+        for (batch, failed) in [(false, false), (false, true), (true, false), (true, true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("test.sh");
+            std::fs::write(&path, "exit 0").unwrap();
+            let entry = Entry {
+                name: "test.sh".into(),
+                url: Url::from_file_path(path).unwrap(),
+                directory: false,
+            };
+            let mut app = App::new().unwrap();
+            app.mode = Mode::Browsing;
+            let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+            draw_app(&mut terminal, &mut app).unwrap();
+            assert!(format!("{:?}", terminal.backend().buffer()).contains("MyEasyToolkit"));
+            if batch {
+                app.selected_scripts.push(entry.clone());
+                app.start_batch();
+            }
+            let action = if batch {
+                Action::RunBatch(entry)
+            } else {
+                Action::Run(entry)
+            };
+            app.action_with_runner(action, &mut |_, _, _| {
+                if failed {
+                    Err("échec".into())
+                } else {
+                    Ok(())
+                }
+            });
+            assert!(app.screen_needs_redraw);
+            // The real terminal's alternate screen is blank after the script returns.
+            terminal.backend_mut().clear().unwrap();
+            assert!(!format!("{:?}", terminal.backend().buffer()).contains("MyEasyToolkit"));
+            draw_app(&mut terminal, &mut app).unwrap();
+            assert!(format!("{:?}", terminal.backend().buffer()).contains("MyEasyToolkit"));
+            assert!(!app.screen_needs_redraw);
+        }
     }
 
     #[test]
