@@ -100,7 +100,7 @@
       "name": "Terminal",
       "kind": "custom",
       "description": "Illustration de la navigation dans un terminal.",
-      "html": "<div class=\"ds-terminal\"><div class=\"ds-head\">MyEasyToolkit <span>Exemple</span></div><pre>›  https://mystorage.ovh/\n\n   Dépôt\n›  init-pxe/</pre></div>",
+      "html": "<div class=\"ds-terminal\"><div class=\"ds-head\">MyEasyToolkit <span>Exemple fictif</span></div><pre>›  https://exemple.invalid/\n\n   Dépôt\n›  scripts/</pre></div>",
       "css": ".ds-terminal{background:#101a2d;color:#e9f0ff;border-radius:14px;overflow:hidden;box-shadow:0 16px 38px #00000026}.ds-head{padding:13px 20px;border-bottom:1px solid #ffffff26;color:#cbd8ed;font:.82rem system-ui,sans-serif;display:flex;justify-content:space-between}.ds-terminal pre{margin:0;padding:18px 22px;font:.88rem/1.75 ui-monospace,SFMono-Regular,Consolas,monospace;overflow:auto}"
     }
   ],
