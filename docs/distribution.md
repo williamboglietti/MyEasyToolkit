@@ -1,6 +1,6 @@
 # Préparer une publication
 
-Le workflow « Publish validated release » est lancé manuellement sur `main`. Il exige une exécution réussie du workflow CI sur le commit courant, construit les binaires et les deux paquets Debian, génère le dépôt APT, signe l’ensemble de distribution et demande au dépôt MyEasyToolkit.com de le publier.
+Le workflow « Publish validated release » démarre automatiquement après une CI réussie sur `main`, et peut aussi être lancé manuellement sur `main`. Il refuse de publier si le commit validé n’est plus la tête de `main`, construit les binaires et les deux paquets Debian, génère le dépôt APT, signe l’ensemble de distribution et demande au dépôt MyEasyToolkit.com de le publier.
 
 La publication exige :
 
