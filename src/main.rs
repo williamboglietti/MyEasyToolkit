@@ -174,6 +174,14 @@ enum Source {
     Github,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Focus {
+    Sources,
+    Contents,
+}
+
+const SOURCES: [Source; 3] = [Source::Local, Source::Http, Source::Github];
+
 fn source_for(url: &Url) -> Source {
     if url.scheme() == "file" {
         Source::Local
@@ -309,6 +317,8 @@ struct App {
     mode: Mode,
     input: Input,
     input_source: Source,
+    focus: Focus,
+    source_cursor: Source,
     message: String,
     selected_scripts: Vec<Entry>,
     stop_on_error: bool,
@@ -335,6 +345,8 @@ impl App {
             mode: Mode::Url,
             input: Input::default(),
             input_source: Source::Http,
+            focus: Focus::Contents,
+            source_cursor: Source::Local,
             message: String::new(),
             selected_scripts: Vec::new(),
             stop_on_error: true,
@@ -380,6 +392,8 @@ impl App {
                         parse_listing(&url, &String::from_utf8_lossy(&data))
                     };
                     self.current = Some(url.clone());
+                    self.source_cursor = source_for(&url);
+                    self.focus = Focus::Contents;
                     if is_new_root || self.root.is_none() {
                         self.root = Some(url);
                     }
@@ -617,6 +631,7 @@ impl App {
         self.message.clear();
         self.input.clear();
         self.input_source = source;
+        self.source_cursor = source;
         if source == Source::Local {
             match std::env::current_dir()
                 .ok()
@@ -675,6 +690,32 @@ impl App {
             }
         }
     }
+    fn active_source(&self) -> Source {
+        self.current.as_ref().map_or(Source::Local, source_for)
+    }
+    fn focus_sources(&mut self) {
+        self.source_cursor = self.active_source();
+        self.focus = Focus::Sources;
+    }
+    fn focus_contents(&mut self) {
+        self.source_cursor = self.active_source();
+        self.focus = Focus::Contents;
+    }
+    fn move_source(&mut self, delta: isize) {
+        let index = SOURCES
+            .iter()
+            .position(|source| *source == self.source_cursor)
+            .unwrap_or(0);
+        let next = index.saturating_add_signed(delta).min(SOURCES.len() - 1);
+        self.source_cursor = SOURCES[next];
+    }
+    fn choose_source(&mut self) {
+        if self.current.is_some() && self.source_cursor == self.active_source() {
+            self.focus_contents();
+        } else {
+            self.select_source(self.source_cursor);
+        }
+    }
     fn move_selection(&mut self, delta: isize) {
         if !self.entries.is_empty() {
             let old = self.state.selected().unwrap_or(0);
@@ -690,6 +731,25 @@ impl App {
         match mode {
             Mode::Browsing => match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => return false,
+                KeyCode::Tab | KeyCode::BackTab => {
+                    if self.focus == Focus::Sources {
+                        self.focus_contents();
+                    } else {
+                        self.focus_sources();
+                    }
+                }
+                KeyCode::Left if self.focus == Focus::Sources => self.move_source(-1),
+                KeyCode::Right if self.focus == Focus::Sources => self.move_source(1),
+                KeyCode::Enter | KeyCode::Char(' ') if self.focus == Focus::Sources => {
+                    self.choose_source()
+                }
+                KeyCode::Down | KeyCode::Char('j') if self.focus == Focus::Sources => {
+                    self.focus_contents()
+                }
+                KeyCode::Up | KeyCode::Char('k') if self.focus == Focus::Sources => {}
+                KeyCode::Up | KeyCode::Char('k') if self.state.selected().unwrap_or(0) == 0 => {
+                    self.focus_sources()
+                }
                 KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
                 KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
                 KeyCode::Enter | KeyCode::Right => self.select(),
@@ -736,6 +796,7 @@ impl App {
                 },
                 KeyCode::Esc => {
                     if self.current.is_some() {
+                        self.focus_sources();
                         self.mode = Mode::Browsing;
                     } else {
                         return false;
@@ -1063,6 +1124,32 @@ fn batch_popup_area(area: Rect) -> Rect {
 fn contains(area: Rect, x: u16, y: u16) -> bool {
     x >= area.x && x < area.right() && y >= area.y && y < area.bottom()
 }
+fn source_layout(area: Rect) -> (&'static str, [&'static str; 3], &'static str, [Rect; 3]) {
+    let prefix = if area.width >= 54 {
+        " Choisir une source : "
+    } else {
+        " "
+    };
+    let labels = if area.width < 28 {
+        ["[1 L]", "[2 H]", "[3 G]"]
+    } else if area.width < 32 {
+        ["[1 Local]", "[2 HTTP]", "[3 Git]"]
+    } else {
+        ["[1 Local]", "[2 HTTP]", "[3 GitHub]"]
+    };
+    let gap = if area.width < 32 { " " } else { "  " };
+    let mut x = area.x.saturating_add(UnicodeWidthStr::width(prefix) as u16);
+    let mut bounds = [Rect::default(); 3];
+    for (index, label) in labels.iter().enumerate() {
+        let width = (UnicodeWidthStr::width(*label) as u16).min(area.right().saturating_sub(x));
+        bounds[index] = Rect::new(x.min(area.right()), area.y, width, area.height.min(1));
+        x = x.saturating_add(
+            UnicodeWidthStr::width(*label) as u16 + UnicodeWidthStr::width(gap) as u16,
+        );
+    }
+    (prefix, labels, gap, bounds)
+}
+
 fn draw(frame: &mut Frame, app: &mut App) {
     let areas = UiAreas::new(frame.area());
     let accent = Style::default().add_modifier(Modifier::BOLD);
@@ -1086,35 +1173,28 @@ fn draw(frame: &mut Frame, app: &mut App) {
         app.current.as_ref().map_or(Source::Local, source_for)
     };
     let source_style = |source| {
-        if active == source {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
+        if matches!(app.mode, Mode::Browsing)
+            && app.focus == Focus::Sources
+            && app.source_cursor == source
+        {
+            // Reverse video remains visible in terminals that disable color.
+            Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
+        } else if active == source {
+            Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
         } else {
             Style::default()
         }
     };
-    let source_labels = if areas.sources.width < 28 {
-        ["[1 L]", "[2 H]", "[3 G]"]
-    } else if areas.sources.width < 32 {
-        ["[1 Local]", "[2 HTTP]", "[3 Git]"]
-    } else {
-        ["[1 Local]", "[2 HTTP]", "[3 GitHub]"]
-    };
-    let source_gap = if areas.sources.width < 32 { " " } else { "  " };
-    let mut sources = vec![
-        Span::raw(" "),
-        Span::styled(source_labels[0], source_style(Source::Local)),
-        Span::raw(source_gap),
-        Span::styled(source_labels[1], source_style(Source::Http)),
-        Span::raw(source_gap),
-        Span::styled(source_labels[2], source_style(Source::Github)),
-    ];
-    if areas.sources.width >= 55 {
-        sources.push(Span::styled("    Choisir une source", Style::default()));
-    }
-    frame.render_widget(Paragraph::new(Line::from(sources)), areas.sources);
+    let (prefix, labels, gap, _) = source_layout(areas.sources);
+    let sources = Line::from(vec![
+        Span::raw(prefix),
+        Span::styled(labels[0], source_style(Source::Local)),
+        Span::raw(gap),
+        Span::styled(labels[1], source_style(Source::Http)),
+        Span::raw(gap),
+        Span::styled(labels[2], source_style(Source::Github)),
+    ]);
+    frame.render_widget(Paragraph::new(sources), areas.sources);
     let editing = matches!(app.mode, Mode::Url);
     let title = if editing {
         if app.input_source == Source::Github {
@@ -1239,13 +1319,19 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::DarkGray)),
         )
-        .highlight_style(
+        .highlight_style(if app.focus == Focus::Contents {
             Style::default()
                 .bg(Color::Black)
                 .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("›");
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        })
+        .highlight_symbol(if app.focus == Focus::Contents {
+            "›"
+        } else {
+            " "
+        });
     frame.render_stateful_widget(list, areas.list, &mut app.state);
     let description_title = if areas.description.width >= 44 {
         " Description · Pg↑/Pg↓ · [↑] [↓] "
@@ -1414,10 +1500,18 @@ fn draw(frame: &mut Frame, app: &mut App) {
         } else {
             app.message.as_str()
         }
+    } else if app.focus == Focus::Sources {
+        if areas.footer.width < 38 {
+            "←/→ source · Entrée · ↓"
+        } else {
+            "←/→ : source  ·  Entrée : choisir  ·  ↓ : fichiers"
+        }
     } else if areas.footer.width < 38 {
-        "Espace choisir · x lancer"
+        "↑ en haut : sources · Espace"
+    } else if areas.footer.width < 72 {
+        "↑ en haut : sources · Espace : choisir"
     } else {
-        "↑/↓ : naviguer  ·  Espace : sélectionner  ·  Entrée : ouvrir"
+        "↑/↓ : fichiers · ↑ en haut : sources · Espace : choisir · Entrée : ouvrir"
     };
     frame.render_widget(
         Paragraph::new(vec![
@@ -1568,8 +1662,14 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
         {
             app.description_scroll = app.description_scroll.saturating_sub(3)
         }
-        MouseEventKind::ScrollDown if matches!(app.mode, Mode::Browsing) => app.move_selection(1),
-        MouseEventKind::ScrollUp if matches!(app.mode, Mode::Browsing) => app.move_selection(-1),
+        MouseEventKind::ScrollDown if matches!(app.mode, Mode::Browsing) => {
+            app.focus_contents();
+            app.move_selection(1);
+        }
+        MouseEventKind::ScrollUp if matches!(app.mode, Mode::Browsing) => {
+            app.focus_contents();
+            app.move_selection(-1);
+        }
         MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
             let x = mouse.column;
             let y = mouse.row;
@@ -1663,32 +1763,11 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
                     return false;
                 }
             } else if matches!(app.mode, Mode::Browsing | Mode::Url)
-                && y == areas.sources.y
-                && x > areas.sources.x
+                && contains(areas.sources, x, y)
             {
-                let col = x - areas.sources.x;
-                if areas.sources.width < 28 {
-                    if (1..=5).contains(&col) {
-                        app.select_source(Source::Local);
-                    } else if (7..=11).contains(&col) {
-                        app.select_source(Source::Http);
-                    } else if (13..=17).contains(&col) {
-                        app.select_source(Source::Github);
-                    }
-                } else if areas.sources.width < 32 {
-                    if (1..=9).contains(&col) {
-                        app.select_source(Source::Local);
-                    } else if (11..=18).contains(&col) {
-                        app.select_source(Source::Http);
-                    } else if (20..=26).contains(&col) {
-                        app.select_source(Source::Github);
-                    }
-                } else if (1..=9).contains(&col) {
-                    app.select_source(Source::Local);
-                } else if (12..=19).contains(&col) {
-                    app.select_source(Source::Http);
-                } else if (22..=31).contains(&col) {
-                    app.select_source(Source::Github);
+                let (_, _, _, bounds) = source_layout(areas.sources);
+                if let Some(index) = bounds.iter().position(|area| contains(*area, x, y)) {
+                    app.select_source(SOURCES[index]);
                 }
             } else if matches!(app.mode, Mode::Url)
                 && areas.location.width > 2
@@ -1719,6 +1798,7 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
             {
                 let index = app.state.offset() + usize::from(y - areas.list.y - 1);
                 if index < app.entries.len() {
+                    app.focus_contents();
                     let already_focused = app.state.selected() == Some(index);
                     app.state.select(Some(index));
                     if x >= areas.list.x + 2
@@ -1835,6 +1915,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     } else {
         app.select_source(Source::Local);
+        if matches!(app.mode, Mode::Browsing) {
+            app.focus_sources();
+        }
     }
     enable_raw_mode()?;
     execute!(
@@ -1902,6 +1985,147 @@ mod input_tests {
 
     fn press(input: &mut Input, key: KeyCode) {
         input.key(KeyEvent::new(key, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn sources_can_be_chosen_and_contents_reached_with_arrows() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("dossier")).unwrap();
+        std::fs::write(dir.path().join("test.sh"), "exit 0").unwrap();
+        let mut app = App::new().unwrap();
+        app.interpreters.bash = Some(PathBuf::from("bash"));
+        app.action(Action::OpenRoot(
+            Url::from_directory_path(dir.path()).unwrap(),
+        ));
+        app.focus_sources();
+        let original = app.current.clone();
+        assert_eq!(app.source_cursor, Source::Local);
+        key(&mut app, KeyCode::Right);
+        assert_eq!(app.source_cursor, Source::Http);
+        assert_eq!(app.current, original);
+        assert!(matches!(app.mode, Mode::Browsing));
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Right);
+        assert_eq!(app.source_cursor, Source::Github);
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Url));
+        assert_eq!(app.input.text, "https://github.com/");
+        key(&mut app, KeyCode::Esc);
+        assert_eq!(app.focus, Focus::Sources);
+        assert_eq!(app.source_cursor, Source::Local);
+        assert_eq!(app.current, original);
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Char(' '));
+        assert_eq!(app.input.text, "https://");
+        key(&mut app, KeyCode::Esc);
+        key(&mut app, KeyCode::Down);
+        assert_eq!(app.focus, Focus::Contents);
+        assert_eq!(app.state.selected(), Some(0));
+        key(&mut app, KeyCode::Up);
+        assert_eq!(app.focus, Focus::Sources);
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(app.focus, Focus::Contents);
+        assert_eq!(app.current, original);
+        key(&mut app, KeyCode::Right);
+        assert!(app
+            .current
+            .as_ref()
+            .unwrap()
+            .to_file_path()
+            .unwrap()
+            .ends_with("dossier"));
+        key(&mut app, KeyCode::Left);
+        assert_eq!(app.current, original);
+    }
+
+    #[test]
+    fn source_focus_is_distinct_from_the_active_source_and_list() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("test.sh"), "exit 0").unwrap();
+        let mut app = App::new().unwrap();
+        app.interpreters.bash = Some(PathBuf::from("bash"));
+        app.action(Action::OpenRoot(
+            Url::from_directory_path(dir.path()).unwrap(),
+        ));
+        app.focus_sources();
+        let areas = UiAreas::new(Rect::new(0, 0, 80, 24));
+        let (_, _, _, sources) = source_layout(areas.sources);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        assert!(terminal.backend().buffer()[(sources[0].x, sources[0].y)]
+            .modifier
+            .contains(Modifier::REVERSED));
+        key(&mut app, KeyCode::Right);
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert!(buffer[(sources[1].x, sources[1].y)]
+            .modifier
+            .contains(Modifier::REVERSED));
+        assert!(buffer[(sources[0].x, sources[0].y)]
+            .modifier
+            .contains(Modifier::UNDERLINED));
+        assert!(!buffer[(sources[0].x, sources[0].y)]
+            .modifier
+            .contains(Modifier::REVERSED));
+        key(&mut app, KeyCode::Down);
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        assert!(!terminal.backend().buffer()[(sources[1].x, sources[1].y)]
+            .modifier
+            .contains(Modifier::REVERSED));
+        assert_eq!(app.source_cursor, Source::Local);
+    }
+
+    #[test]
+    fn source_labels_and_click_areas_follow_the_same_order_at_each_width() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        for width in [24, 28, 32, 54, 80] {
+            let screen = Rect::new(0, 0, width, 24);
+            let area = UiAreas::new(screen).sources;
+            let (prefix, labels, _, bounds) = source_layout(area);
+            if width >= 54 {
+                assert!(prefix.contains("Choisir une source"));
+            } else {
+                assert_eq!(prefix, " ");
+            }
+            for i in 0..3 {
+                assert!(bounds[i].width > 0);
+                if i > 0 {
+                    assert!(bounds[i - 1].right() < bounds[i].x);
+                }
+                let mut app = App::new().unwrap();
+                let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+                terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+                let row = (0..width)
+                    .map(|x| terminal.backend().buffer()[(x, area.y)].symbol())
+                    .collect::<String>();
+                assert!(row.contains(labels[i]), "width {width}: {row}");
+                let event = MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: bounds[i].x,
+                    row: area.y,
+                    modifiers: KeyModifiers::NONE,
+                };
+                mouse(&mut app, event, screen);
+                assert_eq!(app.input_source, SOURCES[i]);
+            }
+        }
+    }
+
+    #[test]
+    fn empty_list_can_return_focus_to_the_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new().unwrap();
+        app.action(Action::OpenRoot(
+            Url::from_directory_path(dir.path()).unwrap(),
+        ));
+        app.focus_sources();
+        key(&mut app, KeyCode::Down);
+        assert_eq!(app.focus, Focus::Contents);
+        assert_eq!(app.state.selected(), None);
+        key(&mut app, KeyCode::Up);
+        assert_eq!(app.focus, Focus::Sources);
+        key(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus, Focus::Contents);
     }
 
     #[test]
@@ -2440,14 +2664,15 @@ mod input_tests {
         let screen = Rect::new(0, 0, 80, 24);
         let areas = UiAreas::new(screen);
         let mut app = App::new().unwrap();
-        mouse(&mut app, click(13, areas.sources.y), screen);
+        let (_, _, _, sources) = source_layout(areas.sources);
+        mouse(&mut app, click(sources[1].x, areas.sources.y), screen);
         assert!(matches!(app.mode, Mode::Url));
         assert_eq!(app.input.text, "https://");
         mouse(&mut app, click(5, areas.location.y + 1), screen);
         assert_eq!(app.input.cursor, 4);
         app.key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
         assert_eq!(app.input.text, "http://");
-        mouse(&mut app, click(23, areas.sources.y), screen);
+        mouse(&mut app, click(sources[2].x, areas.sources.y), screen);
         assert_eq!(app.input_source, Source::Github);
         assert_eq!(app.input.text, "https://github.com/");
 
@@ -2492,7 +2717,12 @@ mod input_tests {
             app.current.as_ref().unwrap().to_file_path().unwrap(),
             dir.path()
         );
-        assert!(mouse(&mut app, click(13, areas.sources.y), screen));
+        let (_, _, _, sources) = source_layout(areas.sources);
+        assert!(mouse(
+            &mut app,
+            click(sources[1].x, areas.sources.y),
+            screen
+        ));
         assert_eq!(app.input.text, "https://");
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
