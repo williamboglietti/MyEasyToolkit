@@ -13,6 +13,10 @@ myeasytoolkit https://github.com/community-scripts/ProxmoxVE
 
 Cliquez sur une source ou utilisez les touches `1`, `2` et `3`. Cliquez sur un élément ou naviguez avec les flèches et Entrée ; Retour arrière remonte, `r` actualise et `q` quitte. Dans les champs de saisie, les flèches déplacent le curseur, Début/Fin rejoignent les extrémités et le collage du terminal est pris en charge. Une erreur de connexion laisse l’adresse modifiable.
 
+Pour lancer plusieurs scripts, cliquez sur leur case ou utilisez Espace. Le numéro indique leur ordre d’exécution ; désélectionner puis sélectionner à nouveau un script le place à la fin. La sélection est conservée en changeant de dossier ou de source. Cliquez sur « Lancer » ou appuyez sur `x` pour vérifier la liste et confirmer son exécution ; les flèches ou la molette permettent de parcourir une longue liste. « Vider » ou `c` efface la sélection.
+
+L’option « Arrêter si erreur » est activée par défaut ; cliquez dessus ou utilisez `e` pour la modifier. Un code de sortie non nul, un échec de démarrage ou de téléchargement interrompt alors la série. Si l’option est désactivée, les scripts suivants sont lancés malgré l’erreur. Le résultat indique le nombre d’échecs ; la sélection reste disponible après l’exécution. L’annulation d’une demande d’authentification interrompt la série.
+
 Les scripts `.sh` et `.ps1` ne sont exécutés qu’après confirmation, avec les droits de l’utilisateur courant. Les scripts locaux sont exécutés depuis leur emplacement d’origine ; les scripts distants sont téléchargés individuellement. Un script distant qui dépend d’autres fichiers du dépôt doit les récupérer lui-même. Les scripts `.sh` nécessitent Bash et les scripts `.ps1` nécessitent PowerShell.
 
 Pour les dépôts HTTP protégés, les identifiants Basic sont demandés lors d’une réponse 401, restent en mémoire pendant la session et ne sont envoyés qu’en HTTPS (sauf sur localhost pour les tests).

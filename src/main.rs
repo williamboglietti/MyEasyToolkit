@@ -204,6 +204,7 @@ enum Action {
     Open(Url),
     OpenRoot(Url),
     Run(Entry),
+    RunBatch(Entry),
 }
 enum Mode {
     Url,
@@ -211,8 +212,23 @@ enum Mode {
     Username(Action),
     Password(Action, String),
     Confirm(Entry),
+    ConfirmBatch,
     Message,
 }
+struct BatchRun {
+    entries: Vec<Entry>,
+    next: usize,
+    failures: Vec<String>,
+    stop_on_error: bool,
+}
+type ScriptRunner<'a> = dyn FnMut(&Entry, &[u8], bool) -> Result<(), String> + 'a;
+
+fn is_script(entry: &Entry) -> bool {
+    !entry.directory
+        && (entry.name.to_ascii_lowercase().ends_with(".sh")
+            || entry.name.to_ascii_lowercase().ends_with(".ps1"))
+}
+
 struct App {
     repo: Repository,
     root: Option<Url>,
@@ -223,6 +239,10 @@ struct App {
     input: Input,
     input_source: Source,
     message: String,
+    selected_scripts: Vec<Entry>,
+    stop_on_error: bool,
+    batch: Option<BatchRun>,
+    batch_scroll: usize,
 }
 impl App {
     fn new() -> Result<Self, String> {
@@ -236,12 +256,19 @@ impl App {
             input: Input::default(),
             input_source: Source::Http,
             message: String::new(),
+            selected_scripts: Vec::new(),
+            stop_on_error: true,
+            batch: None,
+            batch_scroll: 0,
         })
     }
     fn action(&mut self, action: Action) {
+        self.action_with_runner(action, &mut run_script);
+    }
+    fn action_with_runner(&mut self, action: Action, runner: &mut ScriptRunner<'_>) {
         let url = match &action {
             Action::Open(url) | Action::OpenRoot(url) => url,
-            Action::Run(entry) => &entry.url,
+            Action::Run(entry) | Action::RunBatch(entry) => &entry.url,
         };
         let is_new_root = matches!(action, Action::OpenRoot(_));
         let result = if url.scheme() == "file" {
@@ -249,9 +276,9 @@ impl App {
                 Action::Open(_) | Action::OpenRoot(_) => local_listing(url)
                     .map(|entries| (Vec::new(), Some(entries)))
                     .map_err(FetchError::Message),
-                Action::Run(_) => Ok((Vec::new(), None)),
+                Action::Run(_) | Action::RunBatch(_) => Ok((Vec::new(), None)),
             }
-        } else if is_github_api(url) && matches!(action, Action::Run(_)) {
+        } else if is_github_api(url) && matches!(action, Action::Run(_) | Action::RunBatch(_)) {
             self.repo.fetch_github_script(url).map(|data| (data, None))
         } else {
             self.repo.fetch(url).map(|data| (data, None))
@@ -283,9 +310,13 @@ impl App {
                 }
                 Action::Run(entry) => {
                     self.mode = Mode::Browsing;
-                    if let Err(e) = run_script(&entry, &data) {
+                    if let Err(e) = runner(&entry, &data, true) {
                         self.error(e);
                     }
+                }
+                Action::RunBatch(entry) => {
+                    let result = runner(&entry, &data, false);
+                    self.finish_batch_step(&entry, result);
                 }
             },
             Err(FetchError::Unauthorized) => {
@@ -299,7 +330,107 @@ impl App {
                 self.message = e;
                 self.mode = Mode::Url;
             }
-            Err(FetchError::Message(e)) => self.error(e),
+            Err(FetchError::Message(e)) => match action {
+                Action::RunBatch(entry) => self.finish_batch_step(&entry, Err(e)),
+                _ => self.error(e),
+            },
+        }
+    }
+    fn toggle_script(&mut self) {
+        let Some(entry) = self.state.selected().and_then(|i| self.entries.get(i)) else {
+            return;
+        };
+        if !is_script(entry) {
+            return;
+        }
+        if let Some(index) = self
+            .selected_scripts
+            .iter()
+            .position(|item| item.url == entry.url)
+        {
+            self.selected_scripts.remove(index);
+        } else {
+            self.selected_scripts.push(entry.clone());
+        }
+    }
+    fn confirm_batch(&mut self) {
+        if !self.selected_scripts.is_empty() {
+            self.batch_scroll = 0;
+            self.mode = Mode::ConfirmBatch;
+        } else {
+            self.error("Sélectionnez au moins un script avec sa case ou la barre d’espace.".into());
+        }
+    }
+    fn start_batch(&mut self) {
+        if !self.selected_scripts.is_empty() {
+            self.batch = Some(BatchRun {
+                entries: self.selected_scripts.clone(),
+                next: 0,
+                failures: Vec::new(),
+                stop_on_error: self.stop_on_error,
+            });
+            self.mode = Mode::Browsing;
+        }
+    }
+    fn advance_batch(&mut self) {
+        self.advance_batch_with(&mut run_script);
+    }
+    fn advance_batch_with(&mut self, runner: &mut ScriptRunner<'_>) {
+        if matches!(self.mode, Mode::Browsing) {
+            if let Some(entry) = self
+                .batch
+                .as_ref()
+                .and_then(|batch| batch.entries.get(batch.next))
+                .cloned()
+            {
+                self.action_with_runner(Action::RunBatch(entry), runner);
+            }
+        }
+    }
+    fn finish_batch_step(&mut self, entry: &Entry, result: Result<(), String>) {
+        let Some(batch) = self.batch.as_mut() else {
+            return;
+        };
+        let failed = result.is_err();
+        if let Err(error) = result {
+            batch
+                .failures
+                .push(format!("{} : {error}", location_label(&entry.url)));
+        }
+        batch.next += 1;
+        if (failed && batch.stop_on_error) || batch.next == batch.entries.len() {
+            let batch = self.batch.take().expect("batch exists");
+            let skipped = batch.entries.len() - batch.next;
+            let mut summary = format!(
+                "{} script(s) traité(s) sur {}. {} échec(s).",
+                batch.next,
+                batch.entries.len(),
+                batch.failures.len()
+            );
+            if skipped > 0 {
+                summary.push_str(&format!(" {skipped} script(s) non lancé(s)."));
+            }
+            if let Some(error) = batch.failures.last() {
+                summary.push_str(&format!("\nDernière erreur : {error}"));
+            }
+            self.error(summary);
+        } else {
+            self.mode = Mode::Browsing;
+        }
+    }
+    fn cancel_auth(&mut self) {
+        self.input.clear();
+        if self.batch.take().is_some() {
+            self.error(
+                "Exécution interrompue : authentification annulée. La sélection est conservée."
+                    .into(),
+            );
+        } else {
+            self.mode = if self.current.is_some() {
+                Mode::Browsing
+            } else {
+                Mode::Url
+            };
         }
     }
     fn select_source(&mut self, source: Source) {
@@ -346,9 +477,7 @@ impl App {
         {
             if entry.directory {
                 self.action(Action::Open(entry.url));
-            } else if entry.name.to_ascii_lowercase().ends_with(".sh")
-                || entry.name.to_ascii_lowercase().ends_with(".ps1")
-            {
+            } else if is_script(&entry) {
                 self.mode = Mode::Confirm(entry);
             } else {
                 self.error("Ce fichier n’est pas un script .sh ou .ps1.".into());
@@ -384,6 +513,10 @@ impl App {
                 KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
                 KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
                 KeyCode::Enter | KeyCode::Right => self.select(),
+                KeyCode::Char(' ') => self.toggle_script(),
+                KeyCode::Char('x') => self.confirm_batch(),
+                KeyCode::Char('c') => self.selected_scripts.clear(),
+                KeyCode::Char('e') => self.stop_on_error = !self.stop_on_error,
                 KeyCode::Backspace | KeyCode::Left => self.parent(),
                 KeyCode::Char('r') => {
                     if let Some(url) = self.current.clone() {
@@ -429,12 +562,7 @@ impl App {
                     self.mode = Mode::Password(action, username);
                 }
                 KeyCode::Esc => {
-                    self.input.clear();
-                    self.mode = if self.current.is_some() {
-                        Mode::Browsing
-                    } else {
-                        Mode::Url
-                    };
+                    self.cancel_auth();
                 }
                 _ => {
                     self.input.key(key);
@@ -446,18 +574,15 @@ impl App {
                     let password = self.input.take();
                     let scope = match &action {
                         Action::Open(url) | Action::OpenRoot(url) => url.clone(),
-                        Action::Run(entry) => entry.url.join("./").expect("file URL has a parent"),
+                        Action::Run(entry) | Action::RunBatch(entry) => {
+                            entry.url.join("./").expect("file URL has a parent")
+                        }
                     };
                     self.repo.authenticate(scope, username, password);
                     self.action(action);
                 }
                 KeyCode::Esc => {
-                    self.input.clear();
-                    self.mode = if self.current.is_some() {
-                        Mode::Browsing
-                    } else {
-                        Mode::Url
-                    };
+                    self.cancel_auth();
                 }
                 _ => {
                     self.input.key(key);
@@ -469,6 +594,24 @@ impl App {
                     self.action(Action::Run(entry));
                 }
             }
+            Mode::ConfirmBatch => match key.code {
+                KeyCode::Char('o' | 'O' | 'y' | 'Y') => self.start_batch(),
+                KeyCode::Char('e') => {
+                    self.stop_on_error = !self.stop_on_error;
+                    self.mode = Mode::ConfirmBatch;
+                }
+                KeyCode::Down => {
+                    self.batch_scroll =
+                        (self.batch_scroll + 1).min(self.selected_scripts.len().saturating_sub(1));
+                    self.mode = Mode::ConfirmBatch;
+                }
+                KeyCode::Up => {
+                    self.batch_scroll = self.batch_scroll.saturating_sub(1);
+                    self.mode = Mode::ConfirmBatch;
+                }
+                KeyCode::Esc => {}
+                _ => self.mode = Mode::ConfirmBatch,
+            },
             Mode::Message => {
                 self.mode = if self.current.is_some() {
                     Mode::Browsing
@@ -481,7 +624,7 @@ impl App {
     }
 }
 
-fn run_script(entry: &Entry, data: &[u8]) -> Result<(), String> {
+fn execute_script(entry: &Entry, data: &[u8]) -> Result<(), String> {
     let is_ps = entry.name.to_ascii_lowercase().ends_with(".ps1");
     let local_path = entry.url.to_file_path().ok();
     let mut temporary = if local_path.is_none() {
@@ -501,15 +644,6 @@ fn run_script(entry: &Entry, data: &[u8]) -> Result<(), String> {
         (_, Some(file)) => file.path(),
         _ => return Err("Chemin du script indisponible.".into()),
     };
-    disable_raw_mode().map_err(|e| e.to_string())?;
-    execute!(
-        io::stdout(),
-        LeaveAlternateScreen,
-        DisableMouseCapture,
-        DisableBracketedPaste
-    )
-    .map_err(|e| e.to_string())?;
-    println!("Exécution de {}\n", location_label(&entry.url));
     let status = if is_ps {
         Command::new(if cfg!(windows) { "powershell" } else { "pwsh" })
             .args(["-NoProfile", "-File"])
@@ -519,24 +653,51 @@ fn run_script(entry: &Entry, data: &[u8]) -> Result<(), String> {
         Command::new("bash").arg(script_path).status()
     };
     match status {
-        Ok(status) => println!("\nScript terminé : {status}"),
-        Err(e) => println!("\nImpossible de démarrer le script : {e}"),
-    }
-    println!("Cliquez ou appuyez sur Entrée pour revenir au dépôt.");
-    enable_raw_mode().map_err(|e| e.to_string())?;
-    execute!(io::stdout(), EnableMouseCapture).map_err(|e| e.to_string())?;
-    loop {
-        match event::read().map_err(|e| e.to_string())? {
-            Event::Key(key)
-                if key.code == KeyCode::Enter
-                    || (key.modifiers.contains(KeyModifiers::CONTROL)
-                        && key.code == KeyCode::Char('c')) =>
-            {
-                break
-            }
-            Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Down(_)) => break,
-            _ => {}
+        Ok(status) if status.success() => {
+            println!("\nScript terminé : {status}");
+            Ok(())
         }
+        Ok(status) => {
+            println!("\nScript terminé : {status}");
+            Err(format!("code de sortie : {status}"))
+        }
+        Err(e) => {
+            println!("\nImpossible de démarrer le script : {e}");
+            Err(format!("Impossible de démarrer le script : {e}"))
+        }
+    }
+}
+
+fn run_script(entry: &Entry, data: &[u8], wait_for_user: bool) -> Result<(), String> {
+    disable_raw_mode().map_err(|e| e.to_string())?;
+    execute!(
+        io::stdout(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        DisableBracketedPaste
+    )
+    .map_err(|e| e.to_string())?;
+    println!("Exécution de {}\n", location_label(&entry.url));
+    let result = execute_script(entry, data);
+    if wait_for_user {
+        println!("Cliquez ou appuyez sur Entrée pour revenir au dépôt.");
+        enable_raw_mode().map_err(|e| e.to_string())?;
+        execute!(io::stdout(), EnableMouseCapture).map_err(|e| e.to_string())?;
+        loop {
+            match event::read().map_err(|e| e.to_string())? {
+                Event::Key(key)
+                    if key.code == KeyCode::Enter
+                        || (key.modifiers.contains(KeyModifiers::CONTROL)
+                            && key.code == KeyCode::Char('c')) =>
+                {
+                    break
+                }
+                Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Down(_)) => break,
+                _ => {}
+            }
+        }
+    } else {
+        enable_raw_mode().map_err(|e| e.to_string())?;
     }
     execute!(
         io::stdout(),
@@ -545,7 +706,7 @@ fn run_script(entry: &Entry, data: &[u8]) -> Result<(), String> {
         EnableBracketedPaste
     )
     .map_err(|e| e.to_string())?;
-    Ok(())
+    result
 }
 
 struct UiAreas {
@@ -553,6 +714,7 @@ struct UiAreas {
     sources: Rect,
     location: Rect,
     list: Rect,
+    batch_bar: Rect,
     footer: Rect,
 }
 impl UiAreas {
@@ -565,6 +727,7 @@ impl UiAreas {
                 Constraint::Length(3),
                 Constraint::Min(3),
                 Constraint::Length(2),
+                Constraint::Length(2),
             ])
             .split(area);
         Self {
@@ -572,13 +735,24 @@ impl UiAreas {
             sources: parts[1],
             location: parts[2],
             list: parts[3],
-            footer: parts[4],
+            batch_bar: parts[4],
+            footer: parts[5],
         }
     }
 }
 fn popup_area(area: Rect) -> Rect {
     let width = area.width.saturating_sub(2).min(76);
     let height = area.height.saturating_sub(2).min(8);
+    Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    )
+}
+fn batch_popup_area(area: Rect) -> Rect {
+    let width = area.width.saturating_sub(2).min(90);
+    let height = area.height.saturating_sub(2).min(18);
     Rect::new(
         area.x + (area.width - width) / 2,
         area.y + (area.height - height) / 2,
@@ -672,8 +846,17 @@ fn draw(frame: &mut Frame, app: &mut App) {
         .entries
         .iter()
         .map(|entry| {
-            let kind = if entry.directory { "  [D] " } else { "  [F] " };
+            let kind = if entry.directory { "[D] " } else { "[F] " };
+            let selection = if is_script(entry) {
+                app.selected_scripts
+                    .iter()
+                    .position(|item| item.url == entry.url)
+                    .map_or_else(|| " [  ] ".to_string(), |i| format!(" [{:>2}] ", i + 1))
+            } else {
+                "      ".to_string()
+            };
             ListItem::new(Line::from(vec![
+                Span::styled(selection, Style::default().fg(Color::Yellow)),
                 Span::styled(kind, Style::default().fg(Color::Cyan)),
                 Span::raw(&entry.name),
             ]))
@@ -682,7 +865,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
     let list = List::new(items)
         .block(
             Block::default()
-                .title(" Fichiers · [D] dossier  [F] fichier ")
+                .title(" Fichiers · [D] dossier  [F] fichier  [ ] sélectionner ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Gray)),
         )
@@ -705,6 +888,25 @@ fn draw(frame: &mut Frame, app: &mut App) {
             Rect::new(areas.list.x + 1, areas.list.y + 1, areas.list.width - 2, 1),
         );
     }
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::styled(
+                format!(
+                    " [Lancer x] [Vider c]  {} sélectionné(s)",
+                    app.selected_scripts.len()
+                ),
+                Style::default().fg(Color::Cyan),
+            ),
+            Line::styled(
+                format!(
+                    " [{}] Arrêter si erreur (e)",
+                    if app.stop_on_error { "x" } else { " " }
+                ),
+                Style::default().fg(Color::Yellow),
+            ),
+        ]),
+        areas.batch_bar,
+    );
     let actions = if editing {
         " [Ouvrir]  [Annuler]"
     } else {
@@ -717,7 +919,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
             app.message.as_str()
         }
     } else {
-        "↑/↓ : naviguer  ·  Entrée : ouvrir  ·  1/2/3 : source"
+        "↑/↓ : naviguer  ·  Espace : sélectionner  ·  Entrée : ouvrir"
     };
     frame.render_widget(
         Paragraph::new(vec![
@@ -744,7 +946,55 @@ fn draw(frame: &mut Frame, app: &mut App) {
         Mode::Password(_, _) => Some((" Connexion au dépôt ", "Mot de passe", true)),
         _ => None,
     };
-    if let Some((title, label, secret)) = input_prompt {
+    if matches!(app.mode, Mode::ConfirmBatch) {
+        let popup = batch_popup_area(frame.area());
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Block::default()
+                .title(" Confirmer la sélection ")
+                .borders(Borders::ALL)
+                .border_style(accent),
+            popup,
+        );
+        if popup.width > 4 && popup.height >= 6 {
+            let width = popup.width - 4;
+            let visible = usize::from(popup.height.saturating_sub(5));
+            let max_scroll = app.selected_scripts.len().saturating_sub(visible);
+            app.batch_scroll = app.batch_scroll.min(max_scroll);
+            let lines: Vec<Line> = app
+                .selected_scripts
+                .iter()
+                .enumerate()
+                .skip(app.batch_scroll)
+                .take(visible)
+                .map(|(i, entry)| {
+                    Line::raw(format!(
+                        "{}. {} · {}",
+                        i + 1,
+                        entry.name,
+                        location_label(&entry.url)
+                    ))
+                })
+                .collect();
+            frame.render_widget(
+                Paragraph::new(lines),
+                Rect::new(popup.x + 2, popup.y + 1, width, visible as u16),
+            );
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "[{}] Arrêter si erreur (e)",
+                    if app.stop_on_error { "x" } else { " " }
+                ))
+                .style(Style::default().fg(Color::Yellow)),
+                Rect::new(popup.x + 2, popup.bottom() - 4, width, 1),
+            );
+            frame.render_widget(
+                Paragraph::new("[Exécuter] [Annuler]  o / Échap · ↑/↓")
+                    .style(Style::default().fg(Color::Cyan)),
+                Rect::new(popup.x + 2, popup.bottom() - 2, width, 1),
+            );
+        }
+    } else if let Some((title, label, secret)) = input_prompt {
         let popup = popup_area(frame.area());
         frame.render_widget(Clear, popup);
         frame.render_widget(
@@ -808,12 +1058,35 @@ fn draw(frame: &mut Frame, app: &mut App) {
 fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool {
     let areas = UiAreas::new(area);
     match mouse.kind {
+        MouseEventKind::ScrollDown if matches!(app.mode, Mode::ConfirmBatch) => {
+            app.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        MouseEventKind::ScrollUp if matches!(app.mode, Mode::ConfirmBatch) => {
+            app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        }
         MouseEventKind::ScrollDown if matches!(app.mode, Mode::Browsing) => app.move_selection(1),
         MouseEventKind::ScrollUp if matches!(app.mode, Mode::Browsing) => app.move_selection(-1),
         MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
             let x = mouse.column;
             let y = mouse.row;
-            if matches!(app.mode, Mode::Browsing | Mode::Url)
+            if matches!(app.mode, Mode::Browsing)
+                && areas.batch_bar.height > 0
+                && y == areas.batch_bar.y
+            {
+                let col = x.saturating_sub(areas.batch_bar.x);
+                if (1..=10).contains(&col) {
+                    app.confirm_batch();
+                } else if (12..=20).contains(&col) {
+                    app.selected_scripts.clear();
+                }
+            } else if matches!(app.mode, Mode::Browsing)
+                && areas.batch_bar.height > 1
+                && y == areas.batch_bar.y + 1
+                && x > areas.batch_bar.x
+                && x < areas.batch_bar.right()
+            {
+                app.stop_on_error = !app.stop_on_error;
+            } else if matches!(app.mode, Mode::Browsing | Mode::Url)
                 && areas.footer.height > 0
                 && y == areas.footer.y
                 && x >= areas.footer.x
@@ -877,7 +1150,14 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
                 let index = app.state.offset() + usize::from(y - areas.list.y - 1);
                 if index < app.entries.len() {
                     app.state.select(Some(index));
-                    app.select();
+                    if x >= areas.list.x + 2
+                        && x <= areas.list.x + 6
+                        && is_script(&app.entries[index])
+                    {
+                        app.toggle_script();
+                    } else {
+                        app.select();
+                    }
                 }
             } else if matches!(app.mode, Mode::Username(_) | Mode::Password(_, _)) {
                 let popup = popup_area(area);
@@ -906,6 +1186,22 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
                     && x < (popup.x + 25).min(popup.right())
                 {
                     return app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                }
+            } else if matches!(app.mode, Mode::ConfirmBatch) {
+                let popup = batch_popup_area(area);
+                if popup.width > 4
+                    && popup.height >= 6
+                    && y == popup.bottom() - 4
+                    && x >= popup.x + 2
+                    && x < popup.right() - 2
+                {
+                    app.stop_on_error = !app.stop_on_error;
+                } else if popup.width > 4 && popup.height >= 6 && y == popup.bottom() - 2 {
+                    if x >= popup.x + 2 && x < popup.x + 12 {
+                        app.start_batch();
+                    } else if x >= popup.x + 13 && x < popup.x + 22 {
+                        app.mode = Mode::Browsing;
+                    }
                 }
             } else if matches!(app.mode, Mode::Confirm(_)) {
                 let popup = popup_area(area);
@@ -967,6 +1263,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let result = (|| -> io::Result<()> {
         loop {
+            if app.batch.is_some() && matches!(app.mode, Mode::Browsing) {
+                app.advance_batch();
+                continue;
+            }
             terminal.draw(|f| draw(f, &mut app))?;
             match event::read()? {
                 Event::Key(key) if key.kind == event::KeyEventKind::Press => {
@@ -1016,6 +1316,264 @@ mod input_tests {
 
     fn press(input: &mut Input, key: KeyCode) {
         input.key(KeyEvent::new(key, KeyModifiers::NONE));
+    }
+
+    fn key(app: &mut App, code: KeyCode) {
+        assert!(app.key(KeyEvent::new(code, KeyModifiers::NONE)));
+    }
+
+    #[test]
+    fn ordered_selection_supports_mouse_keyboard_folders_and_renumbering() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        for name in ["a.sh", "b.sh", "other.txt"] {
+            std::fs::write(dir.path().join(name), "").unwrap();
+        }
+        std::fs::write(dir.path().join("sub/c.ps1"), "").unwrap();
+        let mut app = App::new().unwrap();
+        app.action(Action::OpenRoot(
+            Url::from_directory_path(dir.path()).unwrap(),
+        ));
+        let screen = Rect::new(0, 0, 80, 24);
+        let areas = UiAreas::new(screen);
+        let click = |x, y| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        };
+        // Listing puts the folder before the files. Select b first with the mouse, then a with space.
+        mouse(&mut app, click(areas.list.x + 3, areas.list.y + 3), screen);
+        app.state.select(Some(1));
+        key(&mut app, KeyCode::Char(' '));
+        assert_eq!(
+            app.selected_scripts
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>(),
+            ["b.sh", "a.sh"]
+        );
+        key(&mut app, KeyCode::Char(' '));
+        key(&mut app, KeyCode::Char(' '));
+        assert_eq!(
+            app.selected_scripts
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>(),
+            ["b.sh", "a.sh"]
+        );
+        app.state.select(Some(0));
+        key(&mut app, KeyCode::Enter);
+        key(&mut app, KeyCode::Char(' '));
+        assert_eq!(
+            app.selected_scripts
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>(),
+            ["b.sh", "a.sh", "c.ps1"]
+        );
+        app.parent();
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let content = format!("{:?}", terminal.backend().buffer());
+        assert!(content.contains("[ 1]"));
+        assert!(content.contains("[ 2]"));
+        mouse(
+            &mut app,
+            click(areas.batch_bar.x + 2, areas.batch_bar.y),
+            screen,
+        );
+        assert!(matches!(app.mode, Mode::ConfirmBatch));
+        let popup = batch_popup_area(screen);
+        mouse(&mut app, click(popup.x + 3, popup.bottom() - 4), screen);
+        assert!(!app.stop_on_error);
+        mouse(&mut app, click(popup.x + 14, popup.bottom() - 2), screen);
+        assert!(matches!(app.mode, Mode::Browsing));
+        assert!(app.batch.is_none());
+        mouse(
+            &mut app,
+            click(areas.batch_bar.x + 2, areas.batch_bar.y),
+            screen,
+        );
+        mouse(&mut app, click(popup.x + 3, popup.bottom() - 2), screen);
+        assert!(app.batch.is_some());
+        assert!(!app.batch.as_ref().unwrap().stop_on_error);
+        app.batch = None;
+        mouse(
+            &mut app,
+            click(areas.batch_bar.x + 13, areas.batch_bar.y),
+            screen,
+        );
+        assert!(app.selected_scripts.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn batch_executes_in_order_and_respects_nonzero_exit_and_launch_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("order");
+        let mut entries = Vec::new();
+        for (name, body) in [
+            ("first.sh", "printf A; exit 7"),
+            ("second.sh", "printf B; exit 0"),
+            ("third.sh", "printf C; exit 0"),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, format!("{{ {body}; }} >> '{}'", log.display())).unwrap();
+            entries.push(Entry {
+                name: name.into(),
+                url: Url::from_file_path(path).unwrap(),
+                directory: false,
+            });
+        }
+        for (stop, expected) in [(true, "A"), (false, "ABC")] {
+            let _ = std::fs::remove_file(&log);
+            let mut app = App::new().unwrap();
+            app.selected_scripts = entries.clone();
+            app.stop_on_error = stop;
+            app.start_batch();
+            while app.batch.is_some() {
+                app.advance_batch_with(&mut |entry, data, _| execute_script(entry, data));
+            }
+            assert_eq!(std::fs::read_to_string(&log).unwrap(), expected);
+            assert!(app.message.contains("1 échec(s)"));
+            assert!(matches!(app.mode, Mode::Message));
+        }
+        std::fs::remove_file(dir.path().join("first.sh")).unwrap();
+        let mut app = App::new().unwrap();
+        app.selected_scripts = entries;
+        app.start_batch();
+        app.advance_batch_with(&mut |entry, data, _| execute_script(entry, data));
+        assert!(app.batch.is_none());
+        assert!(app.message.contains("2 script(s) non lancé(s)"));
+    }
+
+    #[test]
+    fn batch_pauses_for_authentication_and_resumes_same_script() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = Url::parse(&format!(
+            "http://{}/private/test.sh",
+            listener.local_addr().unwrap()
+        ))
+        .unwrap();
+        let server = thread::spawn(move || {
+            for i in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0; 2048];
+                let len = stream.read(&mut request).unwrap();
+                if i == 1 {
+                    assert!(String::from_utf8_lossy(&request[..len])
+                        .to_ascii_lowercase()
+                        .contains("authorization: basic "));
+                }
+                let response = if i == 0 {
+                    "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                } else {
+                    "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nexit 0"
+                };
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        let entry = Entry {
+            name: "test.sh".into(),
+            url: url.clone(),
+            directory: false,
+        };
+        let mut app = App::new().unwrap();
+        app.selected_scripts.push(entry.clone());
+        app.start_batch();
+        app.advance_batch_with(&mut |_, _, _| panic!("must not execute before authentication"));
+        assert!(matches!(app.mode, Mode::Username(Action::RunBatch(_))));
+        assert_eq!(app.batch.as_ref().unwrap().next, 0);
+        app.repo
+            .authenticate(url.join("./").unwrap(), "user".into(), "pass".into());
+        let mut called = false;
+        app.action_with_runner(Action::RunBatch(entry), &mut |_, data, wait| {
+            called = true;
+            assert_eq!(data, b"exit 0");
+            assert!(!wait);
+            Ok(())
+        });
+        server.join().unwrap();
+        assert!(called);
+        assert!(app.batch.is_none());
+        assert!(app.message.contains("0 échec(s)"));
+    }
+
+    #[test]
+    fn canceling_authentication_stops_batch_but_keeps_selection() {
+        let entry = Entry {
+            name: "test.sh".into(),
+            url: Url::parse("https://example.com/private/test.sh").unwrap(),
+            directory: false,
+        };
+        let mut app = App::new().unwrap();
+        app.selected_scripts.push(entry.clone());
+        app.start_batch();
+        app.mode = Mode::Username(Action::RunBatch(entry));
+        key(&mut app, KeyCode::Esc);
+        assert!(app.batch.is_none());
+        assert_eq!(app.selected_scripts.len(), 1);
+        assert!(matches!(app.mode, Mode::Message));
+    }
+
+    #[test]
+    fn download_failure_obeys_the_batch_error_policy() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+        for stop in [true, false] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let remote = Url::parse(&format!(
+                "http://{}/missing.sh",
+                listener.local_addr().unwrap()
+            ))
+            .unwrap();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0; 1024];
+                let _ = stream.read(&mut request).unwrap();
+                stream
+                    .write_all(
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .unwrap();
+            });
+            let local = tempfile::tempdir().unwrap();
+            let mut app = App::new().unwrap();
+            app.selected_scripts = vec![
+                Entry {
+                    name: "missing.sh".into(),
+                    url: remote,
+                    directory: false,
+                },
+                Entry {
+                    name: "next.sh".into(),
+                    url: Url::from_file_path(local.path().join("next.sh")).unwrap(),
+                    directory: false,
+                },
+            ];
+            app.stop_on_error = stop;
+            app.start_batch();
+            let mut runs = 0;
+            while app.batch.is_some() {
+                app.advance_batch_with(&mut |_, _, _| {
+                    runs += 1;
+                    Ok(())
+                });
+            }
+            server.join().unwrap();
+            assert_eq!(runs, usize::from(!stop));
+            assert!(app.message.contains("1 échec(s)"));
+        }
     }
 
     #[test]
