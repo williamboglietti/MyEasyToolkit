@@ -16,6 +16,10 @@ if [[ ! "$signing_key" =~ ^[A-Fa-f0-9]{40}$ ]]; then
   echo 'Indiquez une empreinte OpenPGP complète de 40 caractères.' >&2
   exit 1
 fi
+sign_args=(--batch --yes --local-user "$signing_key")
+if [[ -n "${MET_GPG_PASSPHRASE_FILE:-}" ]]; then
+  sign_args+=(--pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE")
+fi
 shopt -s nullglob
 packages=("$packages_dir"/*.deb)
 if [[ ${#packages[@]} -eq 0 ]]; then
@@ -47,8 +51,8 @@ cp "${packages[@]}" "$output_dir/pool/main/m/myeasytoolkit/"
     -o 'APT::FTPArchive::Release::Architectures=amd64 arm64' \
     -o APT::FTPArchive::Release::Components=main \
     release dists/stable > dists/stable/Release
-  gpg --batch --yes --local-user "$signing_key" --clearsign --output dists/stable/InRelease dists/stable/Release
-  gpg --batch --yes --local-user "$signing_key" --armor --detach-sign --output dists/stable/Release.gpg dists/stable/Release
+  gpg "${sign_args[@]}" --clearsign --output dists/stable/InRelease dists/stable/Release
+  gpg "${sign_args[@]}" --armor --detach-sign --output dists/stable/Release.gpg dists/stable/Release
   gpg --batch --export "$signing_key" > myeasytoolkit-archive-keyring.gpg
   test -s myeasytoolkit-archive-keyring.gpg
 )

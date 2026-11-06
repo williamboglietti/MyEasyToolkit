@@ -5,7 +5,10 @@ trap 'rm -rf "$work_dir"' EXIT
 chmod 755 "$work_dir"
 export GNUPGHOME="$work_dir/gnupg"
 mkdir -m 700 "$GNUPGHOME"
-gpg --batch --passphrase '' --quick-generate-key 'MyEasyToolkit CI <ci@example.invalid>' ed25519 sign 1d
+printf 'ephemeral-test-passphrase' > "$work_dir/passphrase"
+chmod 600 "$work_dir/passphrase"
+export MET_GPG_PASSPHRASE_FILE="$work_dir/passphrase"
+gpg --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --quick-generate-key 'MyEasyToolkit CI <ci@example.invalid>' ed25519 sign 1d
 fingerprint="$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }')"
 bash packaging/build-apt-repository.sh dist "$work_dir/repo" "$fingerprint"
 gpgv --keyring "$work_dir/repo/myeasytoolkit-archive-keyring.gpg" "$work_dir/repo/dists/stable/InRelease"

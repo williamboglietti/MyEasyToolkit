@@ -1,0 +1,113 @@
+name: Publish validated release
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Require successful CI for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          count="$(gh api "repos/$REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$REVISION&event=push&status=success" --jq '.total_count')"
+          [[ "$count" -gt 0 ]] || { echo 'Aucune CI verte sur ce commit de main.' >&2; exit 1; }
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, platform: linux, arch: amd64, target: x86_64-unknown-linux-musl }
+          - { os: ubuntu-24.04-arm, platform: linux, arch: arm64, target: aarch64-unknown-linux-musl }
+          - { os: macos-15-intel, platform: darwin, arch: amd64, target: x86_64-apple-darwin }
+          - { os: macos-15, platform: darwin, arch: arm64, target: aarch64-apple-darwin }
+          - { os: windows-latest, platform: windows, arch: amd64, target: x86_64-pc-windows-msvc }
+          - { os: windows-11-arm, platform: windows, arch: arm64, target: aarch64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux build tools
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+      - name: Run tests on target
+        run: cargo test --locked --target ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package Unix binary
+        if: matrix.platform != 'windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          tar -czf "dist/myeasytoolkit-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" -C "target/${{ matrix.target }}/release" myeasytoolkit
+      - name: Package Debian binary
+        if: matrix.platform == 'linux'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash packaging/build-deb.sh
+      - name: Package Windows binary
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/myeasytoolkit.exe" "dist/myeasytoolkit-windows-${{ matrix.arch }}.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-artifacts
+          merge-multiple: true
+      - name: Install repository tools
+        run: sudo apt-get update && sudo apt-get install -y apt-utils
+      - name: Create signed distribution
+        shell: bash
+        env:
+          SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+          SIGNING_PASSPHRASE: ${{ secrets.APT_SIGNING_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          [[ -n "$SIGNING_KEY" && -n "$SIGNING_PASSPHRASE" ]] || { echo 'Secrets de signature absents.' >&2; exit 1; }
+          export GNUPGHOME="$(mktemp -d)"
+          chmod 700 "$GNUPGHOME"
+          trap 'gpgconf --kill gpg-agent || true; rm -rf "$GNUPGHOME"' EXIT
+          printf '%s' "$SIGNING_KEY" | gpg --batch --import
+          printf '%s' "$SIGNING_PASSPHRASE" > "$GNUPGHOME/passphrase"
+          chmod 600 "$GNUPGHOME/passphrase"
+          export MET_GPG_PASSPHRASE_FILE="$GNUPGHOME/passphrase"
+          fingerprint="$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" { print $10; exit }')"
+          bash packaging/stage-release.sh release-artifacts web/assets "$fingerprint"
+          cp web/download.html web/assets/download.html
+      - name: Validate Worker
+        working-directory: web
+        run: npm ci && npm test && npx wrangler deploy --dry-run
+      - name: Publish to Cloudflare
+        working-directory: web
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy
