@@ -56,11 +56,12 @@ else
   actual="$(shasum -a 256 "$work_dir/$file" | awk '{print $1}')"
 fi
 if [[ "$actual" != "$expected" ]]; then echo 'La somme de contrôle ne correspond pas.' >&2; exit 1; fi
-mkdir -p "$work_dir/unpacked" "$HOME/.local/bin"
+bin_dir="${MET_INSTALL_DIR:-$HOME/.local/bin}"
+mkdir -p "$work_dir/unpacked" "$bin_dir"
 tar -xzf "$work_dir/$file" -C "$work_dir/unpacked"
-install -m 755 "$work_dir/unpacked/myeasytoolkit" "$HOME/.local/bin/myeasytoolkit"
-echo 'Installation terminée : ~/.local/bin/myeasytoolkit'
+install -m 755 "$work_dir/unpacked/myeasytoolkit" "$bin_dir/myeasytoolkit"
+printf 'Installation terminée : %s/myeasytoolkit\n' "$bin_dir"
 case ":$PATH:" in
-  *":$HOME/.local/bin:"*) ;;
-  *) printf '%s\n' "Pour cette session, exécutez : export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+  *":$bin_dir:"*) ;;
+  *) printf "Pour cette session, exécutez : export PATH=%q:\"\$PATH\"\n" "$bin_dir" ;;
 esac
