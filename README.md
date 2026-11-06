@@ -11,7 +11,7 @@ myeasytoolkit
 myeasytoolkit https://github.com/community-scripts/ProxmoxVE
 ```
 
-Cliquez sur une source ou utilisez les touches `1`, `2` et `3`. Cliquez sur un élément ou naviguez avec les flèches et Entrée ; Retour arrière remonte, `r` actualise et `q` quitte. Dans les champs de saisie, les flèches déplacent le curseur, Début/Fin rejoignent les extrémités et le collage du terminal est pris en charge. Une erreur de connexion laisse l’adresse modifiable.
+Au démarrage, la sélection est placée sur les sources : utilisez les flèches gauche et droite puis Entrée pour choisir, ou la flèche bas pour rejoindre les fichiers. Depuis le premier fichier, la flèche haut revient aux sources ; Tab permet également de passer d’une zone à l’autre. Vous pouvez aussi cliquer sur une source ou utiliser les touches `1`, `2` et `3`. Cliquez sur un élément ou naviguez avec les flèches et Entrée ; Retour arrière remonte, `r` actualise et `q` quitte. Dans les champs de saisie, les flèches déplacent le curseur, Début/Fin rejoignent les extrémités et le collage du terminal est pris en charge. Une erreur de connexion laisse l’adresse modifiable.
 
 Par défaut, seuls les dossiers et les scripts dont l’interpréteur est détecté sont affichés : Bash pour `.sh`, PowerShell pour `.ps1`. Le filtre vérifie la présence de l’interpréteur, pas la compatibilité réelle des commandes du script avec votre système. Cliquez sur « Tous » ou appuyez sur `t` pour afficher les autres fichiers ; `.htaccess` et `.htpasswd` restent masqués. Seuls les scripts `.sh` et `.ps1` peuvent être lancés.
 
