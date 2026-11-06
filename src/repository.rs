@@ -374,8 +374,8 @@ mod tests {
     #[test]
     fn urls_are_normalized_and_credentials_rejected() {
         assert_eq!(
-            normalize_url("mystorage.ovh").unwrap().as_str(),
-            "https://mystorage.ovh/"
+            normalize_url("exemple.invalid").unwrap().as_str(),
+            "https://exemple.invalid/"
         );
         assert!(normalize_url("https://user:pass@example.com/").is_err());
         assert!(normalize_url("https://example.com/?sort=1").is_err());
