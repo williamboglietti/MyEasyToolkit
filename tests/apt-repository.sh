@@ -20,3 +20,11 @@ apt-get \
   -o "Dir::State::lists=$work_dir/apt/lists" \
   -o "Dir::Cache=$work_dir/apt/cache" \
   -o APT::Get::List-Cleanup=0 update
+
+for file in myeasytoolkit-darwin-amd64.tar.gz myeasytoolkit-darwin-arm64.tar.gz myeasytoolkit-linux-amd64.tar.gz myeasytoolkit-linux-arm64.tar.gz myeasytoolkit-windows-amd64.exe myeasytoolkit-windows-arm64.exe; do
+  printf 'fixture\n' > "dist/$file"
+done
+bash packaging/stage-release.sh dist "$work_dir/staged" "$fingerprint"
+grep -q "$fingerprint" "$work_dir/staged/install.sh"
+test -s "$work_dir/staged/apt/dists/stable/InRelease"
+(cd "$work_dir/staged/releases/latest" && sha256sum -c ./*.sha256)
