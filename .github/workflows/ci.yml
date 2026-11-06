@@ -72,21 +72,6 @@ jobs:
           path: dist/*.deb
           if-no-files-found: error
 
-  web:
-    runs-on: ubuntu-22.04
-    defaults:
-      run:
-        working-directory: web
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - run: npm ci
-      - run: npm test
-      - run: mkdir -p assets && npx wrangler deploy --dry-run
   shell:
     runs-on: ubuntu-22.04
     steps:
