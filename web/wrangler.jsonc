@@ -1,0 +1,18 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "myeasytoolkit-distribution",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-11-06",
+  "assets": {
+    "directory": "./assets",
+    "binding": "ASSETS",
+    "run_worker_first": ["/"]
+  },
+  "routes": [
+    { "pattern": "get.myeasytoolkit.com", "custom_domain": true },
+    { "pattern": "packages.myeasytoolkit.com", "custom_domain": true },
+    { "pattern": "myeasytoolkit.com/install.sh", "zone_name": "myeasytoolkit.com" },
+    { "pattern": "myeasytoolkit.com/install.ps1", "zone_name": "myeasytoolkit.com" }
+  ],
+  "observability": { "enabled": true }
+}

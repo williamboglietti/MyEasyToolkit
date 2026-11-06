@@ -1,0 +1,95 @@
+name: Build and test
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04-arm, macos-15-intel, macos-15, windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Lint
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --locked
+      - name: Build and run release binary
+        if: runner.os != 'Linux'
+        run: cargo run --release --locked -- --version
+      - name: Test Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tests/install-windows.ps1
+      - name: Test Windows PowerShell 5 installer
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: ./tests/install-windows.ps1
+      - name: Install static build tools
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools apt-utils
+          if [[ "${{ runner.arch }}" == "ARM64" ]]; then
+            echo "TARGET=aarch64-unknown-linux-musl" >> "$GITHUB_ENV"
+          else
+            echo "TARGET=x86_64-unknown-linux-musl" >> "$GITHUB_ENV"
+          fi
+      - name: Add Linux target
+        if: runner.os == 'Linux'
+        shell: bash
+        run: rustup target add "$TARGET"
+      - name: Build Debian package
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash packaging/build-deb.sh
+      - name: Verify Debian package
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get install -y ./dist/*.deb
+          myeasytoolkit --version
+      - name: Verify signed APT repository
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash tests/apt-repository.sh
+      - name: Upload Debian package
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ runner.arch }}
+          path: dist/*.deb
+          if-no-files-found: error
+
+  web:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: mkdir -p assets && npx wrangler deploy --dry-run
+  shell:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck installers/*.sh packaging/*.sh tests/*.sh
+      - run: bash tests/install-shell.sh
