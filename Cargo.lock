@@ -801,7 +801,9 @@ dependencies = [
  "ratatui",
  "reqwest",
  "scraper",
+ "serde_json",
  "tempfile",
+ "unicode-width 0.2.0",
  "url",
 ]
 

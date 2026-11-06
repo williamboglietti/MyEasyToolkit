@@ -48,6 +48,139 @@ pub fn normalize_url(input: &str) -> Result<Url, String> {
     Ok(url)
 }
 
+/// Convert a public GitHub repository URL into its contents API root.
+pub fn github_url(input: &str) -> Result<Url, String> {
+    let url = normalize_url(input)?;
+    if url.scheme() != "https" || url.host_str() != Some("github.com") {
+        return Err("Saisissez une adresse HTTPS de dépôt GitHub public.".into());
+    }
+    let parts: Vec<_> = url
+        .path_segments()
+        .into_iter()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.len() != 2 || parts[0].is_empty() || parts[1].trim_end_matches(".git").is_empty() {
+        return Err(
+            "Utilisez l’adresse d’un dépôt, par exemple https://github.com/proprietaire/depot"
+                .into(),
+        );
+    }
+    let mut api = Url::parse("https://api.github.com/repos/").expect("constant URL");
+    api.path_segments_mut()
+        .expect("API base URL")
+        .pop_if_empty()
+        .push(parts[0])
+        .push(parts[1].trim_end_matches(".git"))
+        .push("contents")
+        .push("");
+    Ok(api)
+}
+
+pub fn is_github_api(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str() == Some("api.github.com")
+        && url.path().starts_with("/repos/")
+        && url.path().contains("/contents/")
+}
+
+fn github_request_url(url: &Url) -> Url {
+    // Directory API URLs redirect if they end in a slash; keep redirects disabled.
+    let mut request_url = url.clone();
+    if is_github_api(url)
+        && url
+            .path()
+            .split_once("/contents/")
+            .is_some_and(|(_, path)| !path.is_empty())
+        && url.path().ends_with('/')
+    {
+        request_url
+            .path_segments_mut()
+            .expect("GitHub URL has path segments")
+            .pop_if_empty();
+    }
+    request_url
+}
+
+pub fn parse_github_listing(base: &Url, bytes: &[u8]) -> Result<Vec<Entry>, String> {
+    let data: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| "Réponse GitHub illisible.".to_string())?;
+    let items = data
+        .as_array()
+        .ok_or_else(|| "GitHub n’a pas renvoyé une liste de fichiers.".to_string())?;
+    if items.len() >= 1000 {
+        return Err("GitHub limite les listes à 1 000 éléments : ce dossier est trop volumineux pour être affiché intégralement.".into());
+    }
+    let mut entries = Vec::new();
+    for item in items {
+        let Some(name) = item.get("name").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let directory = match item.get("type").and_then(|v| v.as_str()) {
+            Some("dir") => true,
+            Some("file") if item.get("submodule_git_url").is_none_or(|v| v.is_null()) => false,
+            _ => continue,
+        };
+        let mut url = base.clone();
+        url.path_segments_mut()
+            .map_err(|_| "Adresse GitHub invalide.".to_string())?
+            .pop_if_empty()
+            .push(name);
+        if directory {
+            url.path_segments_mut()
+                .map_err(|_| "Adresse GitHub invalide.".to_string())?
+                .push("");
+        }
+        entries.push(Entry {
+            name: name.to_owned(),
+            url,
+            directory,
+        });
+    }
+    sort_entries(&mut entries);
+    Ok(entries)
+}
+
+pub fn local_listing(url: &Url) -> Result<Vec<Entry>, String> {
+    let path = url
+        .to_file_path()
+        .map_err(|_| "Chemin local invalide.".to_string())?;
+    let mut entries = Vec::new();
+    for item in
+        std::fs::read_dir(&path).map_err(|e| format!("Lecture du dossier impossible : {e}"))?
+    {
+        let item = item.map_err(|e| format!("Lecture du dossier impossible : {e}"))?;
+        let kind = item
+            .file_type()
+            .map_err(|e| format!("Lecture du fichier impossible : {e}"))?;
+        // Do not follow symlinks out of the chosen root.
+        if !kind.is_dir() && !kind.is_file() {
+            continue;
+        }
+        let url = if kind.is_dir() {
+            Url::from_directory_path(item.path())
+        } else {
+            Url::from_file_path(item.path())
+        }
+        .map_err(|_| "Chemin local invalide.".to_string())?;
+        entries.push(Entry {
+            name: item.file_name().to_string_lossy().into_owned(),
+            url,
+            directory: kind.is_dir(),
+        });
+    }
+    sort_entries(&mut entries);
+    Ok(entries)
+}
+
+fn sort_entries(entries: &mut [Entry]) {
+    entries.sort_by(|a, b| {
+        b.directory
+            .cmp(&a.directory)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+}
+
 fn same_origin(a: &Url, b: &Url) -> bool {
     a.origin() == b.origin()
 }
@@ -92,11 +225,7 @@ pub fn parse_listing(base: &Url, html: &str) -> Vec<Entry> {
             });
         }
     }
-    result.sort_by(|a, b| {
-        b.directory
-            .cmp(&a.directory)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
+    sort_entries(&mut result);
     result
 }
 
@@ -126,6 +255,12 @@ impl Repository {
         });
     }
     pub fn fetch(&self, url: &Url) -> Result<Vec<u8>, FetchError> {
+        self.fetch_with_accept(url, None)
+    }
+    pub fn fetch_github_script(&self, url: &Url) -> Result<Vec<u8>, FetchError> {
+        self.fetch_with_accept(url, Some("application/vnd.github.raw+json"))
+    }
+    fn fetch_with_accept(&self, url: &Url, accept: Option<&str>) -> Result<Vec<u8>, FetchError> {
         let auth = self
             .credentials
             .iter()
@@ -139,7 +274,10 @@ impl Repository {
                 "L’authentification Basic exige HTTPS.".into(),
             ));
         }
-        let mut request = self.client.get(url.clone());
+        let mut request = self.client.get(github_request_url(url));
+        if let Some(accept) = accept {
+            request = request.header("Accept", accept);
+        }
         if let Some(c) = auth {
             request = request.basic_auth(&c.username, Some(&c.password));
         }
@@ -177,6 +315,52 @@ impl Repository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn github_repository_and_children_are_constrained_to_the_contents_api() {
+        let root = github_url("https://github.com/community-scripts/ProxmoxVE").unwrap();
+        assert_eq!(
+            root.as_str(),
+            "https://api.github.com/repos/community-scripts/ProxmoxVE/contents/"
+        );
+        assert!(github_url("http://github.com/community-scripts/ProxmoxVE").is_err());
+        assert!(github_url("https://github.com/community-scripts/ProxmoxVE/tree/main").is_err());
+        let data = br#"[{"name":"z.sh","type":"file"},{"name":"ct","type":"dir"},{"name":"link","type":"symlink"}]"#;
+        let entries = parse_github_listing(&root, data).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[0].url.as_str(),
+            "https://api.github.com/repos/community-scripts/ProxmoxVE/contents/ct/"
+        );
+        assert_eq!(github_request_url(&root), root);
+        assert_eq!(
+            github_request_url(&entries[0].url).as_str(),
+            "https://api.github.com/repos/community-scripts/ProxmoxVE/contents/ct"
+        );
+        assert_eq!(github_request_url(&entries[1].url), entries[1].url);
+        assert_eq!(
+            entries[1].url.as_str(),
+            "https://api.github.com/repos/community-scripts/ProxmoxVE/contents/z.sh"
+        );
+    }
+
+    #[test]
+    fn local_listing_uses_real_directories_and_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("test.sh"), "echo ok").unwrap();
+        let root = Url::from_directory_path(dir.path()).unwrap();
+        let entries = local_listing(&root).unwrap();
+        assert_eq!(
+            entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+            ["sub", "test.sh"]
+        );
+        assert!(entries[0].directory);
+        assert_eq!(
+            entries[1].url.to_file_path().unwrap(),
+            dir.path().join("test.sh")
+        );
+    }
+
     #[test]
     fn apache_listing_only_immediate_same_origin_children() {
         let base = normalize_url("https://example.com/root/").unwrap();
