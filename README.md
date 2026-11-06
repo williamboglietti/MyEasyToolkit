@@ -3,12 +3,11 @@
 Navigateur de scripts dans le terminal, utilisable au clavier et à la souris lorsque le terminal le permet. Au démarrage, le dossier courant est affiché. Choisissez une source en haut de l’écran :
 
 - **Local** : parcourez les fichiers de votre machine, à partir du dossier dans lequel vous avez lancé l’outil.
-- **HTTP** : saisissez l’adresse d’un index HTTP(S) de type Apache, par exemple `https://mystorage.ovh/`. L’adresse préremplie peut être modifiée pour utiliser `http://` si nécessaire.
+- **HTTP** : saisissez l’adresse de votre index HTTP(S) de type Apache. L’adresse préremplie peut être modifiée pour utiliser `http://` si nécessaire.
 - **GitHub** : saisissez l’adresse d’un dépôt public, par exemple `https://github.com/community-scripts/ProxmoxVE`. La navigation utilise la branche par défaut. Les dépôts privés et les liens vers une branche ou un sous-dossier ne sont pas encore pris en charge ; GitHub limite également les requêtes non authentifiées et les listes de dossiers à 1 000 éléments.
 
 ```bash
 myeasytoolkit
-myeasytoolkit https://mystorage.ovh/
 myeasytoolkit https://github.com/community-scripts/ProxmoxVE
 ```
 
@@ -23,7 +22,7 @@ Pour les dépôts HTTP protégés, les identifiants Basic sont demandés lors d�
 ```bash
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
-cargo run -- https://mystorage.ovh/
+cargo run
 ```
 
 Sous Linux, `bash packaging/build-deb.sh` construit un paquet dans `dist/`. La CI produit des paquets Debian statiques pour amd64 et arm64. La préparation des installateurs, du dépôt APT signé et du transfert vers le site est décrite dans [docs/distribution.md](docs/distribution.md). La publication nécessite la configuration des accès et de la clé de signature.
