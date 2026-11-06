@@ -30,4 +30,5 @@ done
 bash packaging/stage-release.sh dist "$work_dir/staged" "$fingerprint"
 grep -q "$fingerprint" "$work_dir/staged/install.sh"
 test -s "$work_dir/staged/apt/dists/stable/InRelease"
+grep -q 'Content-Type: text/plain; charset=utf-8' "$work_dir/staged/_headers"
 (cd "$work_dir/staged/releases/latest" && sha256sum -c ./*.sha256)
