@@ -4,7 +4,7 @@ Le workflow « Publish validated release » est lancé manuellement sur `main`. 
 
 La publication exige :
 
-- une clé OpenPGP dédiée, dont la clé privée ASCII protégée est placée dans le secret Actions `APT_SIGNING_KEY` et la phrase secrète dans `APT_SIGNING_PASSPHRASE` ; conserver une sauvegarde chiffrée indépendante ;
+- une clé OpenPGP dédiée, dont la clé privée ASCII protégée est placée dans le secret Actions `APT_SIGNING_KEY` et la phrase secrète dans `APT_SIGNING_PASSPHRASE` ; la sauvegarde chiffrée est sous `~/Library/Application Support/MyEasyToolkit/apt-signing/` et sa phrase secrète est dans le trousseau macOS sous « MyEasyToolkit APT signing passphrase » ;
 - le secret Actions `CLOUDFLARE_API_TOKEN`, limité aux permissions nécessaires au Worker, aux routes et aux domaines ;
 - la variable Actions `CLOUDFLARE_ACCOUNT_ID` ;
 - la zone `myeasytoolkit.com` sur le compte Cloudflare et les domaines prévus disponibles.
@@ -14,3 +14,5 @@ Ne jamais committer de clé privée ou de phrase secrète. L'installateur shell 
 `bash packaging/build-apt-repository.sh REPERTOIRE_PAQUETS SORTIE EMPREINTE` construit un dépôt APT dans un répertoire encore inexistant. La variable `MET_GPG_PASSPHRASE_FILE` peut désigner un fichier de phrase secrète pour les clés protégées. `bash tests/apt-repository.sh` utilise uniquement une clé éphémère et des fichiers de test sur Linux.
 
 La route `/` de `get.myeasytoolkit.com` reconnaît PowerShell et les navigateurs ; les autres clients reçoivent l'installateur shell, qui détecte lui-même la plateforme. Les en-têtes HTTP ne permettent pas de déduire fiablement le système d'exploitation de tous les clients.
+
+La clé publique et son empreinte sont versionnées dans `packaging/`. La publication refuse une clé privée qui ne correspond pas à cette empreinte. La clé actuelle expire trois ans après sa création ; prévoir une rotation avant son expiration.

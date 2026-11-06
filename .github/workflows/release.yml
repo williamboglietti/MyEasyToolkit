@@ -100,7 +100,10 @@ jobs:
           chmod 600 "$GNUPGHOME/passphrase"
           export MET_GPG_PASSPHRASE_FILE="$GNUPGHOME/passphrase"
           fingerprint="$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" { print $10; exit }')"
+          expected="$(tr -d '\r\n' < packaging/archive-fingerprint.txt)"
+          [[ "$fingerprint" == "$expected" ]] || { echo 'La clé de signature ne correspond pas à la clé de confiance.' >&2; exit 1; }
           bash packaging/stage-release.sh release-artifacts web/assets "$fingerprint"
+          cmp packaging/myeasytoolkit-archive-keyring.gpg web/assets/apt/myeasytoolkit-archive-keyring.gpg
           cp web/download.html web/assets/download.html
       - name: Validate Worker
         working-directory: web
