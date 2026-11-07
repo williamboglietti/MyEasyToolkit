@@ -1,0 +1,29 @@
+name: Windows console diagnostic
+on:
+  pull_request:
+    paths:
+      - 'tests/windows-console.py'
+      - '.github/workflows/windows-console-diagnostic.yml'
+permissions:
+  contents: read
+jobs:
+  console:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install ConPTY test helper
+        run: >-
+          python -m pip install --only-binary=:all: pywinpty==3.1.2
+      - name: Build current executable
+        run: cargo build --release --locked
+      - name: Run the console diagnostic
+        run: python tests/windows-console.py
