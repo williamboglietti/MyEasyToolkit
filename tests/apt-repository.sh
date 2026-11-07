@@ -63,6 +63,14 @@ for test_arch in amd64 arm64; do
   package="$work_dir/staged/releases/latest/myeasytoolkit-linux-$test_arch.deb"
   gpgv --keyring "$work_dir/staged/apt/myeasytoolkit-archive-keyring.gpg" "$package.asc" "$package"
   [[ "$(dpkg-deb -f "$package" Architecture)" == "$test_arch" ]]
+  matched=''
+  for repository_package in "$work_dir/staged/apt/pool/main/m/myeasytoolkit/"*.deb; do
+    if [[ "$(dpkg-deb -f "$repository_package" Architecture)" == "$test_arch" ]]; then
+      cmp "$package" "$repository_package"
+      matched=1
+    fi
+  done
+  [[ "$matched" == 1 ]] || { echo "Paquet $test_arch absent du dépôt." >&2; exit 1; }
 done
 # Une modification après signature ne doit jamais être acceptée.
 cp "$work_dir/staged/releases/latest/myeasytoolkit-linux-$arch.deb" "$work_dir/tampered.deb"
