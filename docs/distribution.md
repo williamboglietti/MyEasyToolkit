@@ -4,7 +4,7 @@ Le workflow « Publish validated release » est lancé manuellement sur `main`. 
 
 La publication exige :
 
-- une clé OpenPGP dédiée, dont la clé privée ASCII protégée est placée dans le secret Actions `APT_SIGNING_KEY` et la phrase secrète dans `APT_SIGNING_PASSPHRASE` ; la sauvegarde chiffrée est sous `~/Library/Application Support/MyEasyToolkit/apt-signing/` et sa phrase secrète est dans le trousseau macOS sous « MyEasyToolkit APT signing passphrase » ;
+- une sous-clé OpenPGP de signature dédiée : son export privé ASCII protégé est placé dans le secret Actions `APT_SIGNING_KEY` et sa phrase secrète dans `APT_SIGNING_PASSPHRASE`. La clé principale privée reste hors de la CI. La nouvelle clé et la transition de confiance APT sont traitées séparément ;
 - le secret Actions `CLOUDFLARE_API_TOKEN`, limité aux permissions nécessaires au Worker, aux routes et aux domaines ;
 - la variable Actions `CLOUDFLARE_ACCOUNT_ID` ;
 - la zone `myeasytoolkit.com` sur le compte Cloudflare et les domaines prévus disponibles.
@@ -46,4 +46,4 @@ de signature détachée.
 
 La route `/` de `get.myeasytoolkit.com` reconnaît PowerShell et les navigateurs ; les autres clients reçoivent l'installateur shell, qui détecte lui-même la plateforme. Les en-têtes HTTP ne permettent pas de déduire fiablement le système d'exploitation de tous les clients.
 
-La clé publique et son empreinte sont versionnées dans `packaging/`. La publication refuse une clé privée qui ne correspond pas à cette empreinte. La clé actuelle expire trois ans après sa création ; prévoir une rotation avant son expiration.
+La clé publique et son empreinte sont versionnées dans `packaging/`. La publication refuse une clé privée qui ne correspond pas à cette empreinte. Prévoir la rotation avant l'expiration des clés et la distribution de la nouvelle confiance aux installations existantes.

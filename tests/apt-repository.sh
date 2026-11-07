@@ -20,6 +20,7 @@ gpg --batch --with-colons --list-secret-keys "$fingerprint" > "$work_dir/secret-
 awk -F: '$1 == "sec" && $15 == "#" { primary_offline = 1 } $1 == "ssb" && $15 != "#" { subkey_available = 1 } END { exit !(primary_offline && subkey_available) }' "$work_dir/secret-key-info"
 bash packaging/build-apt-repository.sh dist "$work_dir/repo" "$fingerprint"
 gpgv --keyring "$work_dir/repo/myeasytoolkit-archive-keyring.gpg" "$work_dir/repo/dists/stable/InRelease"
+gpgv --keyring "$work_dir/repo/myeasytoolkit-archive-keyring.gpg" "$work_dir/repo/dists/stable/Release.gpg" "$work_dir/repo/dists/stable/Release"
 arch="$(dpkg --print-architecture)"
 case "$arch" in amd64|arm64) ;; *) echo "Architecture inattendue : $arch" >&2; exit 1 ;; esac
 grep -qx 'Package: myeasytoolkit' "$work_dir/repo/dists/stable/main/binary-$arch/Packages"
@@ -68,6 +69,16 @@ cp "$work_dir/staged/releases/latest/myeasytoolkit-linux-$arch.deb" "$work_dir/t
 printf 'tampering' >> "$work_dir/tampered.deb"
 if gpgv --keyring "$work_dir/staged/apt/myeasytoolkit-archive-keyring.gpg" "$work_dir/staged/releases/latest/myeasytoolkit-linux-$arch.deb.asc" "$work_dir/tampered.deb" >/dev/null 2>&1; then
   echo 'La signature devrait refuser un paquet modifié.' >&2
+  exit 1
+fi
+mkdir -m 700 "$work_dir/wrong-key-home"
+(
+  export GNUPGHOME="$work_dir/wrong-key-home"
+  gpg --batch --pinentry-mode loopback --passphrase '' --quick-generate-key 'Untrusted CI <wrong@example.invalid>' ed25519 sign 1d
+  gpg --batch --export > "$work_dir/wrong-key.gpg"
+)
+if gpgv --keyring "$work_dir/wrong-key.gpg" "$work_dir/staged/releases/latest/myeasytoolkit-linux-$arch.deb.asc" "$work_dir/staged/releases/latest/myeasytoolkit-linux-$arch.deb" >/dev/null 2>&1; then
+  echo 'Une clé non approuvée ne doit pas valider le paquet.' >&2
   exit 1
 fi
 cp "$work_dir/staged/releases/latest/myeasytoolkit-linux-$arch.deb" "$work_dir/release-input/duplicate.deb"
