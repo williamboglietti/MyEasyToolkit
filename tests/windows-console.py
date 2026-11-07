@@ -61,10 +61,11 @@ def run_published_installer(installer, expected_hash, directory):
     powershell = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
     env = dict(os.environ)
     env['LOCALAPPDATA'] = str(Path(directory) / 'appdata')
+    Path(env['LOCALAPPDATA']).mkdir()
     # A PS7-hosted runner may pass a PSModulePath without Windows PowerShell's
     # built-in modules. Restore the default 5.1 system location for this test.
     system_modules = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/Modules'
-    env['PSModulePath'] = str(system_modules) + os.pathsep + env.get('PSModulePath', '')
+    env['PSMODULEPATH'] = str(system_modules) + os.pathsep + env.get('PSMODULEPATH', '')
     process = PtyProcess.spawn([str(powershell), '-NoLogo', '-NoProfile'],
                                cwd=directory, env=env, dimensions=(30, 120))
     try:
@@ -108,7 +109,8 @@ def main():
     if hashlib.sha256(data).hexdigest() != expected_hash:
         print('The published executable changed; the historical 0.1.0 diagnostic was skipped.', flush=True)
         return
-    with tempfile.TemporaryDirectory(prefix='met-published-') as directory:
+    # Exercise installation under a Windows profile path containing spaces.
+    with tempfile.TemporaryDirectory(prefix='met published ') as directory:
         published = Path(directory) / name
         published.write_bytes(data)
         try:
