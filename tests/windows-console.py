@@ -12,9 +12,9 @@ import urllib.request
 from winpty import PtyProcess
 
 ROOT = Path(__file__).resolve().parents[1]
-LEGACY = {
-    'AMD64': ('amd64', '9a6d916cf825627bab1902b08cfe8ed42555f755e5c531ceb4dec7134eeaac98'),
-    'ARM64': ('arm64', '6f5104ff39c2e1fbfcfa26033d823244c154b1d278eca0046f2ce16ef632c4ee'),
+PUBLISHED = {
+    'AMD64': ('amd64', 'a47e3518c96fcde44f08d571076d48822e82116db2dec8bb1c65cab088e9838b'),
+    'ARM64': ('arm64', 'f61efde2152118ac588786ebefb3f6a83b28dd59a6c0ace6186a43947525b7c4'),
 }
 INSTALLER_SHA256 = 'ea690607d10a412c9f2bf0f4028f21230fbf6e4bf0eb928cea4b8bd55d4a3f25'
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
@@ -80,12 +80,12 @@ def run_published_installer(installer, expected_hash, directory):
         wait_for(process, '__MET_INSTALL_DONE__', timeout=60)
         installed = Path(env['LOCALAPPDATA']) / 'MyEasyToolkit/bin/myeasytoolkit.exe'
         if hashlib.sha256(installed.read_bytes()).hexdigest() != expected_hash:
-            raise AssertionError('The installed executable did not match the published 0.1.0 build.')
-        process.write("$v = myeasytoolkit --version; if ($v -eq 'myeasytoolkit 0.1.0' -and $LASTEXITCODE -eq 0) "
+            raise AssertionError('The installed executable did not match the published 0.1.1 build.')
+        process.write("$v = myeasytoolkit --version; if ($v -eq 'myeasytoolkit 0.1.1' -and $LASTEXITCODE -eq 0) "
                       "{ Write-Output ('__MET_VERSION_' + 'OK__') }\r")
         wait_for(process, '__MET_VERSION_OK__')
         process.write("myeasytoolkit; Write-Output ('__MET_EXIT_' + $LASTEXITCODE + '__')\r")
-        wait_for(process, 'Adresse du')
+        wait_for(process, 'vos scripts en un seul endroit')
         process.write('\x1b')
         wait_for(process, '__MET_EXIT_0__')
     finally:
@@ -99,39 +99,30 @@ def main():
     print('Testing the current executable with Windows PowerShell 5 in ConPTY.', flush=True)
     run_interactive(ROOT / 'target/release/myeasytoolkit.exe', 'vos scripts en un seul endroit')
     native = os.environ.get('PROCESSOR_ARCHITEW6432') or os.environ.get('PROCESSOR_ARCHITECTURE', '')
-    if native not in LEGACY:
+    if native not in PUBLISHED:
         raise RuntimeError(f'Unexpected Windows architecture: {native}')
-    arch, expected_hash = LEGACY[native]
+    arch, expected_hash = PUBLISHED[native]
     name = f'myeasytoolkit-windows-{arch}.exe'
     url = f'https://packages.myeasytoolkit.com/releases/latest/{name}'
     with urllib.request.urlopen(url, timeout=30) as response:
         data = response.read(20 * 1024 * 1024)
     if hashlib.sha256(data).hexdigest() != expected_hash:
-        print('The published executable changed; the historical 0.1.0 diagnostic was skipped.', flush=True)
-        return
+        raise AssertionError('The public executable differs from the approved hotfix.')
     # Exercise installation under a Windows profile path containing spaces.
     with tempfile.TemporaryDirectory(prefix='met published ') as directory:
         published = Path(directory) / name
         published.write_bytes(data)
-        try:
-            run_interactive(published, 'Adresse du')
-        except Exception as error:
-            print(f'Published 0.1.0 interactive diagnostic failed: {error}', file=sys.stderr, flush=True)
-        else:
-            print('Published 0.1.0 displayed its address prompt and exited normally.', flush=True)
+        run_interactive(published, 'vos scripts en un seul endroit')
+        print('Published 0.1.1 opened interactively and exited normally.', flush=True)
         with urllib.request.urlopen('https://myeasytoolkit.com/install.ps1', timeout=30) as response:
             installer_data = response.read(1024 * 1024)
         if hashlib.sha256(installer_data).hexdigest() != INSTALLER_SHA256:
-            print('The public installer changed; its end-to-end diagnostic was skipped.', flush=True)
-            return
+            raise AssertionError('The public installer changed since the deployment check.')
         installer = Path(directory) / 'install.ps1'
         installer.write_bytes(installer_data)
-        try:
-            run_published_installer(installer, expected_hash, directory)
-        except Exception as error:
-            print(f'Public installer diagnostic failed: {error}', file=sys.stderr, flush=True)
-        else:
-            print('Public installer and command-name launch succeeded in PowerShell 5.', flush=True)
+        run_published_installer(installer, expected_hash, directory)
+        print('Public installer and command-name launch succeeded in PowerShell 5.', flush=True)
+
 
 
 if __name__ == '__main__':
