@@ -1,6 +1,6 @@
 # Chaîne de confiance APT : état et proposition
 
-Document de travail. Les choix de l'identité, des clés et de leur stockage restent à valider ; aucun changement de confiance ou de publication n'est effectué par ce document.
+Document de travail. L'identité et les durées ont été choisies ; la sauvegarde, la migration et la publication restent à préparer et vérifier. Aucun changement de confiance ou de publication n'est effectué par ce document.
 
 ## État observé le 7 novembre 2026
 
@@ -16,8 +16,8 @@ L'UID OpenPGP peut porter un nom, un commentaire et une adresse de contact ; ces
 
 ## Architecture proposée
 
-1. Une clé principale dédiée à la certification, conservée chiffrée hors de la CI, avec sauvegarde indépendante et restauration testée. La méthode d'accès, la durée de validité et le choix de conserver ou remplacer la clé actuelle sont à décider.
-2. Une sous-clé de signature pour les publications, seule partie privée mise à disposition de la CI. Contrôler l'export : la clé privée principale ne doit pas être utilisable sur le runner. Protéger aussi la sous-clé et limiter l'accès aux secrets et à la publication.
+1. Une clé principale dédiée à la certification, sans expiration selon le choix de William, conservée chiffrée hors de la CI, avec sauvegarde et restauration testée. La nouvelle clé a déjà été créée avec une expiration de cinq ans : il faut encore supprimer son échéance en conservant son empreinte, sans modifier la clé utilisée par le dépôt actuel.
+2. Une sous-clé de signature valable trois ans selon le choix de William, seule partie privée mise à disposition de la CI. Elle n'est pas encore créée. Contrôler l'export : la clé privée principale ne doit pas être utilisable sur le runner. Protéger aussi la sous-clé et limiter l'accès aux secrets et à la publication.
 3. Un certificat de révocation de la clé principale conservé séparément et protégé. Préparer aussi la procédure de révocation d'une sous-clé : celle-ci doit être diffusée et prise en compte dans le trousseau public mis à jour ; sa simple publication sur un site ou serveur de clés ne met pas à jour les clients APT. Ne pas supposer qu'ajouter le certificat au trousseau suffit : GnuPG indique que `gpgv` ne contrôle pas les clés expirées ou révoquées. Tester le comportement d'APT et retirer les clés compromises du trousseau de confiance si nécessaire.
 4. Un paquet Debian `myeasytoolkit-archive-keyring` gérant le fichier référencé par `signed-by`. Distribuer ses nouvelles versions via le dépôt authentifié ; APT ne l'installe que lors d'une installation ou mise à niveau, pas pendant `apt update` seul.
 5. Une documentation publique des empreintes, de leur période de validité et d'un canal de secours permettant de les vérifier indépendamment du serveur de distribution. Une empreinte livrée par le même canal que la clé ne constitue pas à elle seule une preuve indépendante.
