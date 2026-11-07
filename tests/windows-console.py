@@ -61,11 +61,18 @@ def run_published_installer(installer, expected_hash, directory):
     powershell = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
     env = dict(os.environ)
     env['LOCALAPPDATA'] = str(Path(directory) / 'appdata')
+    # A PS7-hosted runner may pass a PSModulePath without Windows PowerShell's
+    # built-in modules. Restore the default 5.1 system location for this test.
+    system_modules = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/Modules'
+    env['PSModulePath'] = str(system_modules) + os.pathsep + env.get('PSModulePath', '')
     process = PtyProcess.spawn([str(powershell), '-NoLogo', '-NoProfile'],
                                cwd=directory, env=env, dimensions=(30, 120))
     try:
         process.write("Write-Output ('__MET_PS_' + $PSVersionTable.PSVersion.Major + '__')\r")
         wait_for(process, '__MET_PS_5__')
+        process.write("if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) { "
+                      "Write-Output ('__MET_HASH_' + 'READY__') }\r")
+        wait_for(process, '__MET_HASH_READY__')
         quoted = str(installer).replace("'", "''")
         process.write(f"Get-Content -Raw -LiteralPath '{quoted}' | Invoke-Expression; "
                       "Write-Output ('__MET_INSTALL_' + 'DONE__')\r")
