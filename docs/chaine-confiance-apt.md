@@ -28,6 +28,8 @@ Tant que l'ancienne clé est considérée fiable, publier d'abord, sous l'ancien
 
 Une machine qui n'a pas installé le trousseau de transition avant le changement peut refuser les nouvelles signatures : prévoir une procédure de récupération avec vérification de l'empreinte par un canal indépendant. Vérifier également la reprise du fichier de trousseau déjà installé par le script, sa propriété par `dpkg` et le comportement d'une réinstallation de l'installateur.
 
+Le bootstrap actuel refuse plus d'une clé principale et compare le trousseau publié à un seul trousseau épinglé ; le workflow de livraison impose également cette correspondance. Une transition avec deux principales exige donc d'adapter et de tester ces contrôles avant de publier le trousseau mixte. Ne pas simplement remplacer les clés : les clients déjà installés refuseraient les signatures de la nouvelle principale.
+
 ## Actualisation avant `apt update` : option à étudier
 
 Le dépôt `thewebtouch.ovh` contient un prototype TWT Cloud : un hook `APT::Update::Pre-Invoke` récupère un bundle de clés avant la vérification APT, épingle l'empreinte principale et conserve l'historique des sous-clés révoquées. Son état documenté est du staging ; le bundle et la chaîne complète de production ne sont pas démontrés. Ce mécanisme est une option pour MyEasyToolkit, à comparer avec la seule mise à jour par paquet et à tester indépendamment.
