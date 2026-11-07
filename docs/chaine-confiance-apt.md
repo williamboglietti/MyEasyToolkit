@@ -12,7 +12,7 @@ Document de travail. Les choix de l'identité, des clés et de leur stockage res
 
 ## Identité publique
 
-L'UID OpenPGP peut porter un nom, un commentaire et une adresse de contact ; ces éléments sont publics et ne prouvent pas l'identité de leur auteur. L'empreinte, vérifiée par un canal de confiance, identifie la clé. Ne pas inscrire d'adresse de contact qui n'est pas active et maintenue. La clé publique TWT Cloud consultée porte `TWT Cloud Release Signing (production) <security@twtcloud.org>`. Une proposition équivalente est `MyEasyToolkit Release Signing (production) <security@myeasytoolkit.com>` : William a choisi cette adresse et prévoit de s'occuper de sa réception ultérieurement ; aucun enregistrement MX n'a été trouvé le 7 novembre 2026. Le libellé définitif est à choisir avec William.
+L'UID OpenPGP peut porter un nom, un commentaire et une adresse de contact ; ces éléments sont publics et ne prouvent pas l'identité de leur auteur. L'empreinte, vérifiée par un canal de confiance, identifie la clé. La clé publique TWT Cloud consultée porte `TWT Cloud Release Signing (production) <security@twtcloud.org>`. William a validé le libellé `MyEasyToolkit Release Signing (production) <security@myeasytoolkit.com>` et prévoit de s'occuper de la réception de cette adresse ultérieurement ; aucun enregistrement MX n'a été trouvé le 7 novembre 2026. Il faudra vérifier la réception avant d'utiliser cette adresse comme canal d'alerte.
 
 ## Architecture proposée
 
@@ -40,6 +40,7 @@ Ne pas considérer une mise à jour signée par une clé compromise comme preuve
 
 ## Vérifications à réaliser avant livraison
 
+- Essai local sur macOS avec une paire Ed25519 jetable : clé principale de certification, sous-clé de signature et certificat de révocation créés ; export limité aux sous-clés importé dans un trousseau isolé, signature vérifiée et tentative de modifier la clé principale refusée. Cet essai ne valide pas encore la restauration de la clé de production, APT ou les workflows CI.
 - Tester sur Debian et Ubuntu : installation existante 0.1.0, installation neuve, migration du fichier de clé, mise à niveau de l'application et du paquet de clés.
 - Tester avec des clés de test éphémères : rotation normale avec chevauchement, machine n'ayant pas encore reçu le trousseau de transition, sous-clé révoquée et signature non autorisée.
 - Vérifier que la CI ne détient que la sous-clé attendue et que les empreintes utilisées à la construction et au déploiement correspondent.
