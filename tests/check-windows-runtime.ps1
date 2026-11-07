@@ -75,7 +75,7 @@ try {
             $attributes = Read-U32 $entry
             $nameRva = Read-U32 ($entry + 4)
             if ($nameRva -eq 0) { break }
-            if (($attributes -band 1) -eq 0) { throw 'Format d’importation différée PE non pris en charge.' }
+            if (($attributes -band 1) -eq 0) { throw 'Format de chargement differe PE non pris en charge.' }
             $dlls.Add((Read-AsciiZ (Resolve-Rva $nameRva)))
             if ($i -eq 4095) { throw 'Table des importations différées PE trop longue.' }
         }
