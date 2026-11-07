@@ -2,9 +2,11 @@
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
-if [[ -f /etc/debian_version ]] && [[ "$(cut -d. -f1 /etc/debian_version)" == 10 ]]; then
-  # Debian 10 has moved to the signed Debian archive.
-  printf 'deb http://archive.debian.org/debian buster main\n' > /etc/apt/sources.list
+debian_version="$(cut -d. -f1 /etc/debian_version)"
+if [[ "$debian_version" == 10 || "$debian_version" == 11 ]]; then
+  # Use the signed archive for old releases and allow archived Release dates.
+  if [[ "$debian_version" == 10 ]]; then suite=buster; else suite=bullseye; fi
+  printf 'deb http://archive.debian.org/debian %s main\n' "$suite" > /etc/apt/sources.list
   apt-get -o Acquire::Check-Valid-Until=false update
 else
   apt-get update
