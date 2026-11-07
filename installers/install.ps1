@@ -1,8 +1,11 @@
 $ErrorActionPreference = 'Stop'
 $baseUrl = 'https://packages.myeasytoolkit.com/releases/latest'
-$arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {
-    'X64' { 'amd64' }
-    'Arm64' { 'arm64' }
+# A 32-bit PowerShell process on 64-bit Windows reports the native
+# architecture through PROCESSOR_ARCHITEW6432.
+$nativeArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+$arch = switch ($nativeArch) {
+    'AMD64' { 'amd64' }
+    'ARM64' { 'arm64' }
     default { throw 'Architecture non prise en charge.' }
 }
 $file = "myeasytoolkit-windows-$arch.exe"
