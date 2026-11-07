@@ -40,6 +40,14 @@ mkdir -p "$work_dir/keyring-build"
 )
 # La CI de publication ne doit avoir besoin que de la sous-clé de signature.
 gpg --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --export-secret-subkeys "$fingerprint" > "$work_dir/signing-subkey.gpg"
+cat "$work_dir/public-keyring.gpg" "$work_dir/signing-subkey.gpg" > "$work_dir/mixed-keyring.gpg"
+(
+  cd "$work_dir/keyring-build"
+  if bash "$repo_dir/packaging/build-archive-keyring-deb.sh" "$work_dir/mixed-keyring.gpg" "$fingerprint" 1.0 >/dev/null 2>&1; then
+    echo 'Un trousseau public contenant une sous-clé privée doit être refusé.' >&2
+    exit 1
+  fi
+)
 export GNUPGHOME="$work_dir/signing-only"
 mkdir -m 700 "$GNUPGHOME"
 gpg --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --import "$work_dir/signing-subkey.gpg"
