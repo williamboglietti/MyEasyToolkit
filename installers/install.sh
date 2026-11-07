@@ -17,6 +17,11 @@ case "$(uname -m)" in
 esac
 
 if [[ "$(uname -s)" == Linux ]] && command -v apt-get >/dev/null; then
+  apt_arch="$(dpkg --print-architecture)"
+  case "$apt_arch" in
+    amd64|arm64) ;;
+    *) echo "Architecture Debian non prise en charge : $apt_arch" >&2; exit 1 ;;
+  esac
   if [[ ! "$apt_fingerprint" =~ ^[A-F0-9]{40}$ ]]; then
     echo 'Installateur incomplet : empreinte de signature absente.' >&2; exit 1
   fi
@@ -31,7 +36,7 @@ if [[ "$(uname -s)" == Linux ]] && command -v apt-get >/dev/null; then
   if [[ "$actual_fingerprint" != "$apt_fingerprint" || "$primary_count" != 1 ]]; then
     echo 'La clé du dépôt ne correspond pas à la clé attendue.' >&2; exit 1
   fi
-  printf 'deb [signed-by=/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg] %s/apt stable main\n' "$base_url" > "$work_dir/myeasytoolkit.list"
+  printf 'deb [arch=%s signed-by=/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg] %s/apt stable main\n' "$apt_arch" "$base_url" > "$work_dir/myeasytoolkit.list"
   run_root install -m 644 "$work_dir/keyring.gpg" /usr/share/keyrings/myeasytoolkit-archive-keyring.gpg
   run_root install -m 644 "$work_dir/myeasytoolkit.list" /etc/apt/sources.list.d/myeasytoolkit.list
   run_root apt-get update

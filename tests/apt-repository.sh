@@ -16,13 +16,23 @@ arch="$(dpkg --print-architecture)"
 case "$arch" in amd64|arm64) ;; *) echo "Architecture inattendue : $arch" >&2; exit 1 ;; esac
 grep -qx 'Package: myeasytoolkit' "$work_dir/repo/dists/stable/main/binary-$arch/Packages"
 mkdir -p "$work_dir/apt/lists/partial" "$work_dir/apt/cache/archives/partial"
-printf 'deb [signed-by=%s] file:%s stable main\n' "$work_dir/repo/myeasytoolkit-archive-keyring.gpg" "$work_dir/repo" > "$work_dir/sources.list"
-apt-get \
-  -o "Dir::Etc::sourcelist=$work_dir/sources.list" \
-  -o Dir::Etc::sourceparts=- \
-  -o "Dir::State::lists=$work_dir/apt/lists" \
-  -o "Dir::Cache=$work_dir/apt/cache" \
-  -o APT::Get::List-Cleanup=0 update
+update_test_apt() {
+  LC_ALL=C apt-get \
+    -o "Dir::Etc::sourcelist=$work_dir/sources.list" \
+    -o Dir::Etc::sourceparts=- \
+    -o "Dir::State::lists=$work_dir/apt/lists" \
+    -o "Dir::Cache=$work_dir/apt/cache" \
+    -o "APT::Architectures::=$arch" \
+    -o APT::Architectures::=i386 \
+    -o APT::Get::List-Cleanup=0 update 2>&1
+}
+# Vérifier le dépôt signé avec une architecture étrangère configurée dans APT.
+printf 'deb [arch=%s signed-by=%s] file:%s stable main\n' "$arch" "$work_dir/repo/myeasytoolkit-archive-keyring.gpg" "$work_dir/repo" > "$work_dir/sources.list"
+update_test_apt | tee "$work_dir/apt-restricted.log"
+if grep -q 'binary-i386' "$work_dir/apt-restricted.log"; then
+  echo 'Le filtre de la source APT devrait ignorer i386.' >&2
+  exit 1
+fi
 
 for file in myeasytoolkit-darwin-amd64.tar.gz myeasytoolkit-darwin-arm64.tar.gz myeasytoolkit-linux-amd64.tar.gz myeasytoolkit-linux-arm64.tar.gz myeasytoolkit-windows-amd64.exe myeasytoolkit-windows-arm64.exe; do
   printf 'fixture\n' > "dist/$file"
