@@ -59,3 +59,28 @@ try {
     Remove-Item Env:MET_TEST_FIXTURE -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $workDir
 }
+
+# La CI construit le binaire avant ce test. Vérifier ses importations PE évite
+# de masquer une dépendance au redistribuable préinstallé sur les runners.
+$release = Join-Path $PSScriptRoot '../target/release/myeasytoolkit.exe'
+if (Test-Path $release) {
+    & "$PSScriptRoot/check-windows-runtime.ps1" -Executable $release
+    # Un faux import MSVCR doit être détecté, même sur un runner ayant déjà le runtime.
+    $bytes = [IO.File]::ReadAllBytes((Resolve-Path $release))
+    $text = [Text.Encoding]::ASCII.GetString($bytes)
+    $offset = $text.IndexOf('KERNEL32.dll', [StringComparison]::OrdinalIgnoreCase)
+    if ($offset -lt 0) { throw 'Import système KERNEL32.dll introuvable dans le binaire de test.' }
+    $fakeImport = [Text.Encoding]::ASCII.GetBytes('MSVCR120.dll')
+    [Array]::Copy($fakeImport, 0, $bytes, $offset, $fakeImport.Length)
+    $fakePe = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
+    try {
+        [IO.File]::WriteAllBytes($fakePe, $bytes)
+        $rejected = $false
+        try { & "$PSScriptRoot/check-windows-runtime.ps1" -Executable $fakePe } catch { $rejected = $true }
+        if (!$rejected) { throw 'Un import dynamique MSVCR aurait dû être refusé.' }
+    } finally {
+        Remove-Item -Force $fakePe -ErrorAction SilentlyContinue
+    }
+} elseif ($env:GITHUB_ACTIONS -eq 'true') {
+    throw 'Binaire Windows de publication introuvable pour le contrôle PE.'
+}
