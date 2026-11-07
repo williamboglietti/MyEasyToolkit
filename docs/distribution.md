@@ -13,6 +13,12 @@ Ne jamais committer de clé privée ou de phrase secrète. L'installateur shell 
 
 `bash packaging/build-apt-repository.sh REPERTOIRE_PAQUETS SORTIE EMPREINTE` construit un dépôt APT dans un répertoire encore inexistant. La variable `MET_GPG_PASSPHRASE_FILE` peut désigner un fichier de phrase secrète pour les clés protégées. `bash tests/apt-repository.sh` utilise uniquement une clé éphémère et des fichiers de test sur Linux.
 
+## Préparer le paquet de clés publiques
+
+Sous Linux, `bash packaging/build-archive-keyring-deb.sh CLE_PUBLIQUE.gpg EMPREINTE VERSION` prépare `dist/keyring/myeasytoolkit-archive-keyring_VERSION_all.deb`. Le fichier fourni doit être un trousseau OpenPGP binaire contenant une seule clé principale publique dont l'empreinte complète est celle indiquée. La construction refuse les clés privées.
+
+Ce paquet contient uniquement le trousseau public. La vérification de l'empreinte principale ne limite pas les sous-clés à un projet. Sa préparation n'active pas la mise à jour automatique des clés ou des révocations ; la publication et la transition des installations existantes nécessitent encore une procédure vérifiée. Ne pas utiliser une clé de test comme clé de production.
+
 ## Télécharger et vérifier un paquet Debian
 
 Le dépôt APT reste la méthode recommandée : sa signature protège ses métadonnées
