@@ -1,24 +1,40 @@
 name: Publish validated release
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: [Build and test]
+    types: [completed]
+    branches: [main]
 permissions:
   contents: read
   actions: read
 jobs:
   validate:
     runs-on: ubuntu-22.04
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success')
+    outputs:
+      revision: ${{ steps.revision.outputs.revision }}
     steps:
-      - name: Require successful CI for this commit
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - name: Require successful CI for the current main commit
+        id: revision
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-          REVISION: ${{ github.sha }}
+          RELEASE_REVISION: ${{ github.event.workflow_run.head_sha || github.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          count="$(gh api "repos/$REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$REVISION&event=push&status=success" --jq '.total_count')"
-          [[ "$count" -gt 0 ]] || { echo 'Aucune CI verte sur ce commit de main.' >&2; exit 1; }
+          MAIN_REVISION="$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          SUCCESSFUL_CI_COUNT="$(gh api "repos/$REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$RELEASE_REVISION&event=push&status=success" --jq '.total_count')"
+          export MAIN_REVISION SUCCESSFUL_CI_COUNT
+          revision="$(bash packaging/validate-release-revision.sh)"
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
   build:
     needs: validate
     strategy:
@@ -34,6 +50,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.revision }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Linux build tools
         if: matrix.platform == 'linux'
@@ -68,15 +86,26 @@ jobs:
           path: dist/*
           if-no-files-found: error
   publish:
-    needs: build
+    needs: [validate, build]
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+          ref: ${{ needs.validate.outputs.revision }}
+      - name: Recheck the release still targets main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_REVISION: ${{ needs.validate.outputs.revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          MAIN_REVISION="$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          SUCCESSFUL_CI_COUNT=1
+          export MAIN_REVISION SUCCESSFUL_CI_COUNT
+          bash packaging/validate-release-revision.sh >/dev/null
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
@@ -92,7 +121,8 @@ jobs:
         run: |
           set -euo pipefail
           [[ -n "$SIGNING_KEY" && -n "$SIGNING_PASSPHRASE" ]] || { echo 'Secrets de signature absents.' >&2; exit 1; }
-          export GNUPGHOME="$(mktemp -d)"
+          GNUPGHOME="$(mktemp -d)"
+          export GNUPGHOME
           chmod 700 "$GNUPGHOME"
           trap 'gpgconf --kill gpg-agent || true; rm -rf "$GNUPGHOME"' EXIT
           printf '%s' "$SIGNING_KEY" | gpg --batch --import
@@ -102,15 +132,30 @@ jobs:
           fingerprint="$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" { print $10; exit }')"
           expected="$(tr -d '\r\n' < packaging/archive-fingerprint.txt)"
           [[ "$fingerprint" == "$expected" ]] || { echo 'La clé de signature ne correspond pas à la clé de confiance.' >&2; exit 1; }
-          bash packaging/stage-release.sh release-artifacts web/assets "$fingerprint"
-          cmp packaging/myeasytoolkit-archive-keyring.gpg web/assets/apt/myeasytoolkit-archive-keyring.gpg
-          cp web/download.html web/assets/download.html
-      - name: Validate Worker
-        working-directory: web
-        run: npm ci && npm test && npx wrangler deploy --dry-run
-      - name: Publish to Cloudflare
-        working-directory: web
+          bash packaging/stage-release.sh release-artifacts distribution "$fingerprint"
+          cmp packaging/myeasytoolkit-archive-keyring.gpg distribution/apt/myeasytoolkit-archive-keyring.gpg
+          tar -C distribution -czf distribution.tar.gz apt releases install.sh install.ps1 _headers
+          gpg --batch --yes --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --local-user "$fingerprint" --detach-sign --output distribution.tar.gz.sig distribution.tar.gz
+      - name: Publish signed bundle to GitHub
+        id: bundle
+        shell: bash
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler deploy
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REVISION: ${{ needs.validate.outputs.revision }}
+        run: |
+          set -euo pipefail
+          tag="build-${RELEASE_REVISION}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          gh release create "$tag" distribution.tar.gz distribution.tar.gz.sig \
+            --repo "$GITHUB_REPOSITORY" --target "$RELEASE_REVISION" --prerelease --latest=false \
+            --title "Distribution ${RELEASE_REVISION:0:12}" --notes "Signed distribution bundle for site deployment."
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+      - name: Trigger site deployment
+        env:
+          GH_TOKEN: ${{ secrets.SITE_DEPLOY_TOKEN }}
+          RELEASE_TAG: ${{ steps.bundle.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$GH_TOKEN" ]] || { echo 'Secret SITE_DEPLOY_TOKEN absent.' >&2; exit 1; }
+          jq -n --arg tag "$RELEASE_TAG" '{ref:"main",inputs:{release_tag:$tag}}' | \
+            gh api --method POST repos/williamboglietti/MyEasyToolkit.com/actions/workflows/deploy.yml/dispatches --input -

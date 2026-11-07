@@ -3,7 +3,7 @@
 /dist/
 /web/node_modules/
 /web/.wrangler/
+/.wrangler/
 /.impeccable/mocks/
 /.impeccable/questions/
 /.impeccable/review/
-/.wrangler/

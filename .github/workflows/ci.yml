@@ -155,24 +155,10 @@ jobs:
             -v "$PWD/tests/compat-rpm-client.sh:/compat-client.sh:ro" \
             '${{ matrix.image }}' bash /compat-client.sh '${{ matrix.ed25519 }}'
 
-  web:
-    runs-on: ubuntu-22.04
-    defaults:
-      run:
-        working-directory: web
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - run: npm ci
-      - run: npm test
-      - run: mkdir -p assets && npx wrangler deploy --dry-run
   shell:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - run: shellcheck installers/*.sh packaging/*.sh tests/*.sh
       - run: bash tests/install-shell.sh
+      - run: bash tests/release-revision.sh
