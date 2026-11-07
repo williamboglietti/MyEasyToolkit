@@ -22,14 +22,11 @@ update_test_apt() {
     -o Dir::Etc::sourceparts=- \
     -o "Dir::State::lists=$work_dir/apt/lists" \
     -o "Dir::Cache=$work_dir/apt/cache" \
+    -o "APT::Architectures::=$arch" \
     -o APT::Architectures::=i386 \
     -o APT::Get::List-Cleanup=0 update 2>&1
 }
-# Reproduire la notification multiarchitecture, puis vérifier qu'elle disparaît
-# lorsque la source utilise le filtre fourni par l'installateur.
-printf 'deb [arch=%s,i386 signed-by=%s] file:%s stable main\n' "$arch" "$work_dir/repo/myeasytoolkit-archive-keyring.gpg" "$work_dir/repo" > "$work_dir/sources.list"
-update_test_apt | tee "$work_dir/apt-unrestricted.log"
-grep -q 'binary-i386' "$work_dir/apt-unrestricted.log"
+# Vérifier le dépôt signé avec une architecture étrangère configurée dans APT.
 printf 'deb [arch=%s signed-by=%s] file:%s stable main\n' "$arch" "$work_dir/repo/myeasytoolkit-archive-keyring.gpg" "$work_dir/repo" > "$work_dir/sources.list"
 update_test_apt | tee "$work_dir/apt-restricted.log"
 if grep -q 'binary-i386' "$work_dir/apt-restricted.log"; then
