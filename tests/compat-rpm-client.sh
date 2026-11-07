@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "Distribution : $(cat /etc/os-release | grep '^PRETTY_NAME=') ; $(rpm --version)"
+echo "Distribution : $(grep '^PRETTY_NAME=' /etc/os-release) ; $(rpm --version)"
 for algo in rsa4096 ed25519; do
   log="/tmp/met-$algo.log"
   if rpm --import "/fixtures/$algo.asc" > "$log" 2>&1 &&
