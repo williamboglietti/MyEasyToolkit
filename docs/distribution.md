@@ -15,9 +15,21 @@ Ne jamais committer de clé privée ou de phrase secrète. L'installateur shell 
 
 ## Préparer le paquet de clés publiques
 
-Sous Linux, `bash packaging/build-archive-keyring-deb.sh CLE_PUBLIQUE.gpg EMPREINTE VERSION` prépare `dist/keyring/myeasytoolkit-archive-keyring_VERSION_all.deb`. Le fichier fourni doit être un trousseau OpenPGP binaire contenant une seule clé principale publique dont l'empreinte complète est celle indiquée. La construction refuse les clés privées.
+Le paquet de clés et son actualisation sont en cours de préparation. Sous Linux, la commande suivante construit un paquet **de test** :
 
-Ce paquet contient uniquement le trousseau public. La vérification de l'empreinte principale ne limite pas les sous-clés à un projet. Sa préparation n'active pas la mise à jour automatique des clés ou des révocations ; la publication et la transition des installations existantes nécessitent encore une procédure vérifiée. Ne pas utiliser une clé de test comme clé de production.
+```bash
+bash packaging/build-archive-keyring-deb.sh \
+  CLE_PROJET_PUBLIQUE.gpg EMPREINTE_PROJET VERSION \
+  CLE_AUTORITE_PUBLIQUE.gpg EMPREINTE_AUTORITE 'IDENTITE PUBLIQUE DU PROJET'
+```
+
+Les deux fichiers sont des certificats OpenPGP publics binaires ; la construction refuse toute clé privée. La clé de projet doit être une clé principale indépendante capable de signer, dont l'identité indiquée est certifiée par l'autorité, pour une durée limitée. Elle est destinée à signer le dépôt et les paquets. L'autorité est réservée à la certification et ne figure dans le paquet que sous sa forme publique.
+
+Le prototype utilise un catalogue public `https://packages.myeasytoolkit.com/apt/certificates.gpg`. Lors d'un `apt update`, un programme fourni par le paquet vérifie la certification par l'autorité, conserve les révocations déjà observées et met à jour la clé de projet acceptée par APT. Il ne s'agit pas d'une fonctionnalité native de délégation d'APT. Les certifications doivent être renouvelées avant leur expiration. Si une machine n'a jamais reçu une révocation, un ancien catalogue peut encore être présenté jusqu'à l'expiration de la certification : celle-ci limite cette période sans la supprimer.
+
+Si la vérification est impossible, le prototype suspend les installations et mises à jour de MyEasyToolkit ; les programmes installés peuvent toujours être lancés. Il préserve les installations des autres dépôts lorsqu'elles sont demandées séparément. Une opération APT qui inclut aussi MyEasyToolkit est interrompue et doit être relancée pour les autres paquets seuls. Il vérifie aussi que les listes APT mises en cache ont été signées par une clé de projet encore autorisée. Ce contrôle vise la source HTTPS `/apt`, distribution `stable`. Les installations directes avec `dpkg` et les téléchargements seuls ne passent pas par ce contrôle. Une configuration APT personnalisée ou une défaillance du système de fichiers peut réduire la protection : ne pas assimiler ce prototype à une garantie universelle.
+
+**Ce mécanisme n'est pas encore publié ni relié à l'installateur ou au workflow de livraison.** Sa mise en service nécessite notamment la publication du paquet et du catalogue, le choix des clés de production et une procédure de migration testée. Ne pas utiliser de clés de test en production.
 
 ## Télécharger et vérifier un paquet Debian
 

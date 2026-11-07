@@ -11,39 +11,45 @@ export MET_GPG_PASSPHRASE_FILE="$work_dir/passphrase"
 gpg --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --quick-generate-key 'MyEasyToolkit CI <ci@example.invalid>' ed25519 cert 1d
 fingerprint="$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }')"
 gpg --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --quick-add-key "$fingerprint" ed25519 sign 1d
-# Le paquet de clés contient uniquement le certificat public attendu.
-gpg --batch --export "$fingerprint" > "$work_dir/public-keyring.gpg"
-gpg --batch --armor --export "$fingerprint" > "$work_dir/public-keyring.asc"
+# Une autorité jetable certifie une clé de projet indépendante.
+project_uid='TEST MyEasyToolkit <met@example.invalid>'
+gpg --batch --yes --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --quick-generate-key "$project_uid" ed25519 sign 1d
+project_fingerprint="$(gpg --batch --with-colons --list-keys "$project_uid" | awk -F: '$1 == "fpr" { print $10; exit }')"
+gpg --batch --yes --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --default-cert-expire 1d --local-user "$fingerprint!" --quick-sign-key "$project_fingerprint"
+gpg --batch --export "$fingerprint!" > "$work_dir/authority.gpg"
+gpg --batch --export "$project_fingerprint!" > "$work_dir/public-keyring.gpg"
+gpg --batch --armor --export "$project_fingerprint!" > "$work_dir/public-keyring.asc"
 gpg --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --export-secret-keys "$fingerprint" > "$work_dir/private-keyring.gpg"
 repo_dir="$PWD"
 mkdir -p "$work_dir/keyring-build"
 (
   cd "$work_dir/keyring-build"
-  bash "$repo_dir/packaging/build-archive-keyring-deb.sh" "$work_dir/public-keyring.gpg" "$fingerprint" 1.0
+  bash "$repo_dir/packaging/build-archive-keyring-deb.sh" "$work_dir/public-keyring.gpg" "$project_fingerprint" 1.0 "$work_dir/authority.gpg" "$fingerprint" "$project_uid"
   keyring_deb=dist/keyring/myeasytoolkit-archive-keyring_1.0_all.deb
   [[ "$(dpkg-deb -f "$keyring_deb" Package)" == myeasytoolkit-archive-keyring ]]
   [[ "$(dpkg-deb -f "$keyring_deb" Architecture)" == all ]]
   dpkg-deb -x "$keyring_deb" extracted
   cmp "$work_dir/public-keyring.gpg" extracted/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg
-  if bash "$repo_dir/packaging/build-archive-keyring-deb.sh" "$work_dir/public-keyring.gpg" 0000000000000000000000000000000000000000 1.0 >/dev/null 2>&1; then
+  if bash "$repo_dir/packaging/build-archive-keyring-deb.sh" "$work_dir/public-keyring.gpg" 0000000000000000000000000000000000000000 1.0 "$work_dir/authority.gpg" "$fingerprint" "$project_uid" >/dev/null 2>&1; then
     echo 'Une empreinte incorrecte doit être refusée.' >&2
     exit 1
   fi
-  if bash "$repo_dir/packaging/build-archive-keyring-deb.sh" "$work_dir/private-keyring.gpg" "$fingerprint" 1.0 >/dev/null 2>&1; then
+  if bash "$repo_dir/packaging/build-archive-keyring-deb.sh" "$work_dir/private-keyring.gpg" "$project_fingerprint" 1.0 "$work_dir/authority.gpg" "$fingerprint" "$project_uid" >/dev/null 2>&1; then
     echo 'Une clé privée ne doit jamais être incluse dans le paquet.' >&2
     exit 1
   fi
-  if bash "$repo_dir/packaging/build-archive-keyring-deb.sh" "$work_dir/public-keyring.asc" "$fingerprint" 1.0 >/dev/null 2>&1; then
+  if bash "$repo_dir/packaging/build-archive-keyring-deb.sh" "$work_dir/public-keyring.asc" "$project_fingerprint" 1.0 "$work_dir/authority.gpg" "$fingerprint" "$project_uid" >/dev/null 2>&1; then
     echo 'Un trousseau ASCII doit être refusé pour garantir la compatibilité APT.' >&2
     exit 1
   fi
 )
+python3 tests/test_apt_trust_refresh.py
 # La CI de publication ne doit avoir besoin que de la sous-clé de signature.
 gpg --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --export-secret-subkeys "$fingerprint" > "$work_dir/signing-subkey.gpg"
 cat "$work_dir/public-keyring.gpg" "$work_dir/signing-subkey.gpg" > "$work_dir/mixed-keyring.gpg"
 (
   cd "$work_dir/keyring-build"
-  if bash "$repo_dir/packaging/build-archive-keyring-deb.sh" "$work_dir/mixed-keyring.gpg" "$fingerprint" 1.0 >/dev/null 2>&1; then
+  if bash "$repo_dir/packaging/build-archive-keyring-deb.sh" "$work_dir/mixed-keyring.gpg" "$project_fingerprint" 1.0 "$work_dir/authority.gpg" "$fingerprint" "$project_uid" >/dev/null 2>&1; then
     echo 'Un trousseau public contenant une sous-clé privée doit être refusé.' >&2
     exit 1
   fi
