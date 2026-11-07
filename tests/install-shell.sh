@@ -72,7 +72,7 @@ for TEST_APT_ARCH in amd64 arm64; do
   bash "$work_dir/install.sh"
   grep -Fx "deb [arch=$TEST_APT_ARCH signed-by=/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg] https://packages.myeasytoolkit.com/apt stable main" "$TEST_OUTPUT"
   grep -Fx 'update' "$TEST_APT_CALLS"
-  grep -Fx 'install -y myeasytoolkit' "$TEST_APT_CALLS"
+  grep -Fx 'install -y myeasytoolkit-archive-keyring myeasytoolkit' "$TEST_APT_CALLS"
 done
 TEST_APT_ARCH=i386
 export TEST_APT_ARCH

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -ne 3 ]]; then
-  echo "Usage: $0 PUBLIC_KEYRING PRIMARY_FINGERPRINT VERSION" >&2
+  echo "Usage: $0 PUBLIC_KEYRING PRIMARY_FINGERPRINTS_CSV VERSION" >&2
   exit 2
 fi
 keyring="$1"
@@ -12,7 +12,7 @@ if [[ "$(uname -s)" != Linux ]]; then
   echo 'La construction du paquet Debian doit être effectuée sous Linux.' >&2
   exit 1
 fi
-if [[ ! -f "$keyring" || ! "$fingerprint" =~ ^[A-F0-9]{40}$ ]]; then
+if [[ ! -f "$keyring" || ! "$fingerprint" =~ ^[A-F0-9]{40}(,[A-F0-9]{40})*$ ]]; then
   echo 'Fichier de clés ou empreinte OpenPGP invalide.' >&2
   exit 1
 fi
@@ -33,10 +33,10 @@ if grep -Eq '^:secret (sub )?key packet:' "$work_dir/packets"; then
   exit 1
 fi
 gpg --homedir "$work_dir/gnupg" --batch --show-keys --with-colons "$keyring" > "$work_dir/key-info"
-actual_fingerprint="$(awk -F: '$1 == "fpr" { print $10; exit }' "$work_dir/key-info")"
-primary_count="$(awk -F: '$1 == "pub" { count++ } END { print count+0 }' "$work_dir/key-info")"
-if [[ "$actual_fingerprint" != "$fingerprint" || "$primary_count" != 1 ]]; then
-  echo "La clé publique ne correspond pas à l'empreinte attendue." >&2
+awk -F: '$1 == "pub" { primary=1; next } primary && $1 == "fpr" { print $10; primary=0 }' "$work_dir/key-info" | LC_ALL=C sort > "$work_dir/actual-fingerprints"
+printf '%s\n' "$fingerprint" | tr ',' '\n' | LC_ALL=C sort > "$work_dir/expected-fingerprints"
+if [[ ! -s "$work_dir/actual-fingerprints" ]] || ! cmp -s "$work_dir/actual-fingerprints" "$work_dir/expected-fingerprints"; then
+  echo "Les clés publiques ne correspondent pas aux empreintes attendues." >&2
   exit 1
 fi
 # APT sur les anciennes versions de Debian attend un trousseau binaire.

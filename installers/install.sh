@@ -40,7 +40,7 @@ if [[ "$(uname -s)" == Linux ]] && command -v apt-get >/dev/null; then
   run_root install -m 644 "$work_dir/keyring.gpg" /usr/share/keyrings/myeasytoolkit-archive-keyring.gpg
   run_root install -m 644 "$work_dir/myeasytoolkit.list" /etc/apt/sources.list.d/myeasytoolkit.list
   run_root apt-get update
-  run_root apt-get install -y myeasytoolkit
+  run_root apt-get install -y myeasytoolkit-archive-keyring myeasytoolkit
   echo 'Installation terminée. Lancez : myeasytoolkit'
   exit 0
 fi

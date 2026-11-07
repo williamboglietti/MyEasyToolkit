@@ -11,13 +11,19 @@ La publication exige :
 
 Ne jamais committer de clé privée ou de phrase secrète. L'installateur shell publié incorpore l'empreinte de la clé qui a signé les métadonnées APT ; si elle change, les installations existantes doivent faire l'objet d'une procédure de rotation explicite. Les URL de publication sont servies par des assets Workers. Le domaine principal ne reçoit que les deux routes d'installation indiquées dans `web/wrangler.jsonc`.
 
-`bash packaging/build-apt-repository.sh REPERTOIRE_PAQUETS SORTIE EMPREINTE` construit un dépôt APT dans un répertoire encore inexistant. La variable `MET_GPG_PASSPHRASE_FILE` peut désigner un fichier de phrase secrète pour les clés protégées. `bash tests/apt-repository.sh` utilise uniquement une clé éphémère et des fichiers de test sur Linux.
+`bash packaging/build-apt-repository.sh REPERTOIRE_PAQUETS SORTIE EMPREINTE [PAQUET_CLES.deb]` construit un dépôt APT dans un répertoire encore inexistant. La variable `MET_GPG_PASSPHRASE_FILE` peut désigner un fichier de phrase secrète pour les clés protégées. `bash tests/apt-repository.sh` utilise uniquement des clés éphémères et des fichiers de test sur Linux.
 
 ## Préparer le paquet de clés publiques
 
-Sous Linux, `bash packaging/build-archive-keyring-deb.sh CLE_PUBLIQUE.gpg EMPREINTE VERSION` prépare `dist/keyring/myeasytoolkit-archive-keyring_VERSION_all.deb`. Le fichier fourni doit être un trousseau OpenPGP binaire contenant une seule clé principale publique dont l'empreinte complète est celle indiquée. La construction refuse les clés privées.
+Sous Linux, `bash packaging/build-archive-keyring-deb.sh CLE_PUBLIQUE.gpg EMPREINTES VERSION` prépare `dist/keyring/myeasytoolkit-archive-keyring_VERSION_all.deb`. Le fichier est un trousseau OpenPGP binaire. Indiquer toutes les empreintes principales complètes en majuscules, séparées par des virgules. La construction refuse les clés privées et les clés publiques absentes de cette liste, ou les empreintes qui ne correspondent à aucune clé.
 
-Ce paquet contient uniquement le trousseau public. La vérification de l'empreinte principale ne limite pas les sous-clés à un projet. Sa préparation n'active pas la mise à jour automatique des clés ou des révocations ; la publication et la transition des installations existantes nécessitent encore une procédure vérifiée. Ne pas utiliser une clé de test comme clé de production.
+Ce paquet contient uniquement le trousseau public et ne configure aucun hook APT. Il peut contenir momentanément l'ancienne et la nouvelle clé pendant une rotation prévue. Les sources APT qui référencent ce fichier acceptent les clés qu'il contient : partager le fichier entre plusieurs dépôts partage donc leur confiance. Ne pas utiliser une clé de test comme clé de production.
+
+`bash packaging/stage-release.sh ARTIFACTS SORTIE EMPREINTE` prépare aussi ce paquet et l'ajoute au dépôt. Pour préparer une rotation, l'appel accepte en outre `TROUSSEAU_PUBLIC EMPREINTES VERSION_DU_PAQUET_DE_CLES` : le trousseau peut contenir les deux clés et la liste doit inclure la clé qui signe actuellement le dépôt. Augmenter la version du paquet de clés pour que les clients puissent le mettre à jour. L'export public utilisé au premier amorçage reste celui de la clé de signature courante.
+
+La publication automatisée utilise actuellement l'appel à trois paramètres et prépare un trousseau à une seule clé. Pour publier une transition à deux clés, il faudra adapter et tester la chaîne de publication avec les paramètres supplémentaires avant de changer la clé de signature ; cette préparation ne rend pas la rotation automatique.
+
+Les étapes d'[installation manuelle](installation-apt.md) et de [réponse à une compromission](incident-cle-apt.md) s'appliquent après validation et publication effectives de cette version. Aucune clé de production ni migration n'est réalisée par leur préparation.
 
 ## Télécharger et vérifier un paquet Debian
 
