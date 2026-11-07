@@ -21,6 +21,8 @@ Ce paquet contient uniquement le trousseau public et ne configure aucun hook APT
 
 `bash packaging/stage-release.sh ARTIFACTS SORTIE EMPREINTE` prépare aussi ce paquet et l'ajoute au dépôt. Pour préparer une rotation, l'appel accepte en outre `TROUSSEAU_PUBLIC EMPREINTES VERSION_DU_PAQUET_DE_CLES` : le trousseau peut contenir les deux clés et la liste doit inclure la clé qui signe actuellement le dépôt. Augmenter la version du paquet de clés pour que les clients puissent le mettre à jour. L'export public utilisé au premier amorçage reste celui de la clé de signature courante.
 
+La publication automatisée utilise actuellement l'appel à trois paramètres et prépare un trousseau à une seule clé. Pour publier une transition à deux clés, il faudra adapter et tester la chaîne de publication avec les paramètres supplémentaires avant de changer la clé de signature ; cette préparation ne rend pas la rotation automatique.
+
 Les étapes d'[installation manuelle](installation-apt.md) et de [réponse à une compromission](incident-cle-apt.md) s'appliquent après validation et publication effectives de cette version. Aucune clé de production ni migration n'est réalisée par leur préparation.
 
 ## Télécharger et vérifier un paquet Debian
