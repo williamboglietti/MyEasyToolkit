@@ -29,7 +29,8 @@ def wait_for(process, needle, timeout=35):
                 output += process.read(4096)
             except EOFError:
                 break
-            if needle in ANSI.sub('', output):
+            # ConPTY can render spacing with cursor moves instead of literal spaces.
+            if ''.join(needle.split()) in ''.join(ANSI.sub('', output).split()):
                 return
         if not process.isalive():
             break
@@ -40,8 +41,8 @@ def run_interactive(binary, expected_text):
     powershell = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
     process = PtyProcess.spawn([str(powershell), '-NoLogo', '-NoProfile'], dimensions=(30, 120))
     try:
-        process.write("Write-Output '__MET_READY__'\r")
-        wait_for(process, '__MET_READY__')
+        process.write("Write-Output ('__MET_PS_' + $PSVersionTable.PSVersion.Major + '__')\r")
+        wait_for(process, '__MET_PS_5__')
         quoted = str(binary).replace("'", "''")
         process.write(f"& '{quoted}'; Write-Output ('__MET_EXIT_' + $LASTEXITCODE + '__')\r")
         wait_for(process, expected_text)
