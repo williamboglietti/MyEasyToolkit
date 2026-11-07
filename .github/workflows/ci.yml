@@ -11,7 +11,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04-arm, macos-15-intel, macos-15, windows-latest, windows-11-arm]
+        os:
+          - ubuntu-22.04
+          - ubuntu-24.04-arm
+          - macos-15-intel
+          - macos-15
+          - macos-26-intel
+          - macos-26
+          - xcode-27
+          - windows-latest
+          - windows-11-arm
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -71,6 +80,80 @@ jobs:
           name: deb-${{ runner.arch }}
           path: dist/*.deb
           if-no-files-found: error
+
+  apt-compatibility:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: 'debian:10', os: ubuntu-22.04, arch: X64 }
+          - { image: 'debian:11', os: ubuntu-22.04, arch: X64 }
+          - { image: 'debian:12', os: ubuntu-22.04, arch: X64 }
+          - { image: 'debian:13', os: ubuntu-22.04, arch: X64 }
+          - { image: 'ubuntu:20.04', os: ubuntu-22.04, arch: X64 }
+          - { image: 'ubuntu:22.04', os: ubuntu-22.04, arch: X64 }
+          - { image: 'ubuntu:24.04', os: ubuntu-22.04, arch: X64 }
+          - { image: 'ubuntu:26.04', os: ubuntu-22.04, arch: X64 }
+          - { image: 'debian:10', os: ubuntu-24.04-arm, arch: ARM64 }
+          - { image: 'debian:11', os: ubuntu-24.04-arm, arch: ARM64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: deb-${{ matrix.arch }}
+          path: dist
+      - run: sudo apt-get update && sudo apt-get install -y apt-utils gnupg
+      - name: Create signed repositories with temporary keys
+        run: bash tests/compat-apt-prepare.sh dist "$RUNNER_TEMP/met-apt-fixtures"
+      - name: Install the package and verify both signatures
+        run: |
+          docker run --rm \
+            -v "$RUNNER_TEMP/met-apt-fixtures:/fixtures:ro" \
+            -v "$PWD/tests/compat-apt-client.sh:/compat-client.sh:ro" \
+            '${{ matrix.image }}' bash /compat-client.sh
+
+  rpm-fixtures:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create signed sample RPMs with temporary keys
+        run: |
+          mkdir -p "$RUNNER_TEMP/met-rpm-fixtures"
+          docker run --rm \
+            -v "$RUNNER_TEMP/met-rpm-fixtures:/fixtures" \
+            -v "$PWD/tests/compat-rpm-prepare.sh:/compat-prepare.sh:ro" \
+            fedora:42 bash /compat-prepare.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm-signature-fixtures
+          path: ${{ runner.temp }}/met-rpm-fixtures
+          if-no-files-found: error
+
+  rpm-compatibility:
+    needs: rpm-fixtures
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: 'rockylinux/rockylinux:8', ed25519: unsupported }
+          - { image: 'rockylinux/rockylinux:9', ed25519: supported }
+          - { image: 'rockylinux/rockylinux:10', ed25519: supported }
+          - { image: 'fedora:42', ed25519: supported }
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: rpm-signature-fixtures
+          path: ${{ runner.temp }}/met-rpm-fixtures
+      - name: Verify signatures on RPM packages
+        run: |
+          docker run --rm \
+            -v "$RUNNER_TEMP/met-rpm-fixtures:/fixtures:ro" \
+            -v "$PWD/tests/compat-rpm-client.sh:/compat-client.sh:ro" \
+            '${{ matrix.image }}' bash /compat-client.sh '${{ matrix.ed25519 }}'
 
   shell:
     runs-on: ubuntu-22.04

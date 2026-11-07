@@ -46,4 +46,5 @@ Description: Browse and run scripts from HTTP repositories
  Interactive terminal browser for public and authenticated script repositories.
 CONTROL
 mkdir -p dist
-dpkg-deb --build --root-owner-group "$package_dir" "dist/myeasytoolkit_${version}_${arch}.deb"
+# zstd, the default on recent dpkg versions, cannot be read by Debian 10/11.
+dpkg-deb -Zxz --build --root-owner-group "$package_dir" "dist/myeasytoolkit_${version}_${arch}.deb"
