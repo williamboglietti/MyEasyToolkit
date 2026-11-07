@@ -12,7 +12,7 @@ Document de travail. Les choix de l'identité, des clés et de leur stockage res
 
 ## Identité publique
 
-L'UID OpenPGP peut porter un nom, un commentaire et une adresse de contact ; ces éléments sont publics et ne prouvent pas l'identité de leur auteur. L'empreinte, vérifiée par un canal de confiance, identifie la clé. Ne pas inscrire d'adresse de contact qui n'est pas active et maintenue. La clé publique TWT Cloud consultée porte `TWT Cloud Release Signing (production) <security@twtcloud.org>`. Une proposition équivalente pour ce projet est `MyEasyToolkit Release Signing (production)`, avec une adresse à choisir et vérifier séparément. La convention définitive est à choisir avec William.
+L'UID OpenPGP peut porter un nom, un commentaire et une adresse de contact ; ces éléments sont publics et ne prouvent pas l'identité de leur auteur. L'empreinte, vérifiée par un canal de confiance, identifie la clé. Ne pas inscrire d'adresse de contact qui n'est pas active et maintenue. La clé publique TWT Cloud consultée porte `TWT Cloud Release Signing (production) <security@twtcloud.org>`. Une proposition équivalente est `MyEasyToolkit Release Signing (production) <security@myeasytoolkit.com>` : William a choisi cette adresse ; sa capacité à recevoir des messages reste à vérifier et aucun enregistrement MX n'a été trouvé le 7 novembre 2026. Le libellé définitif est à choisir avec William.
 
 ## Architecture proposée
 
