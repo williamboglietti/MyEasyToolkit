@@ -11,6 +11,10 @@ export MET_GPG_PASSPHRASE_FILE="$work_dir/passphrase"
 gpg --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --quick-generate-key 'MyEasyToolkit CI <ci@example.invalid>' ed25519 cert 1d
 fingerprint="$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }')"
 gpg --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --quick-add-key "$fingerprint" ed25519 sign 1d
+gpg --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --quick-generate-key 'MyEasyToolkit next CI <next@example.invalid>' ed25519 sign 1d
+next_fingerprint="$(gpg --batch --with-colons --list-keys 'next@example.invalid' | awk -F: '$1 == "fpr" { print $10; exit }')"
+gpg --batch --export "$fingerprint" "$next_fingerprint" > "$work_dir/rotation-keyring.gpg"
+gpg --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --export-secret-keys "$next_fingerprint" > "$work_dir/next-signing-key.gpg"
 # Le paquet de clés contient uniquement le certificat public attendu.
 gpg --batch --export "$fingerprint" > "$work_dir/public-keyring.gpg"
 gpg --batch --armor --export "$fingerprint" > "$work_dir/public-keyring.asc"
@@ -25,6 +29,12 @@ mkdir -p "$work_dir/keyring-build"
   [[ "$(dpkg-deb -f "$keyring_deb" Architecture)" == all ]]
   dpkg-deb -x "$keyring_deb" extracted
   cmp "$work_dir/public-keyring.gpg" extracted/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg
+  bash "$repo_dir/packaging/build-archive-keyring-deb.sh" "$work_dir/rotation-keyring.gpg" "$fingerprint,$next_fingerprint" 1.1
+  dpkg-deb -x dist/keyring/myeasytoolkit-archive-keyring_1.1_all.deb rotation
+  cmp "$work_dir/rotation-keyring.gpg" rotation/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg
+  if bash "$repo_dir/packaging/build-archive-keyring-deb.sh" "$work_dir/rotation-keyring.gpg" "$fingerprint" 1.0 >/dev/null 2>&1; then
+    echo 'Une clé non déclarée doit être refusée.' >&2; exit 1
+  fi
   if bash "$repo_dir/packaging/build-archive-keyring-deb.sh" "$work_dir/public-keyring.gpg" 0000000000000000000000000000000000000000 1.0 >/dev/null 2>&1; then
     echo 'Une empreinte incorrecte doit être refusée.' >&2
     exit 1
@@ -90,6 +100,35 @@ for file in myeasytoolkit-darwin-amd64.tar.gz myeasytoolkit-darwin-arm64.tar.gz 
   printf 'fixture\n' > "$work_dir/release-input/$file"
 done
 bash packaging/stage-release.sh "$work_dir/release-input" "$work_dir/staged" "$fingerprint"
+for test_arch in amd64 arm64; do
+  grep -qx 'Package: myeasytoolkit-archive-keyring' "$work_dir/staged/apt/dists/stable/main/binary-$test_arch/Packages"
+done
+keyring_package=("$work_dir/staged/apt/pool/main/m/myeasytoolkit-archive-keyring/"*.deb)
+[[ ${#keyring_package[@]} -eq 1 ]]
+mkdir -p "$work_dir/keyring-control"
+dpkg-deb -e "${keyring_package[0]}" "$work_dir/keyring-control"
+[[ ! -f "$work_dir/keyring-control/postinst" && ! -f "$work_dir/keyring-control/preinst" ]]
+if dpkg-deb -c "${keyring_package[0]}" | grep -q '/etc/apt/'; then
+  echo 'Le paquet de clés ne doit pas installer de configuration APT.' >&2; exit 1
+fi
+bash packaging/stage-release.sh "$work_dir/release-input" "$work_dir/staged-rotation" "$fingerprint" "$work_dir/rotation-keyring.gpg" "$fingerprint,$next_fingerprint" 1.1
+rotation_package=("$work_dir/staged-rotation/apt/pool/main/m/myeasytoolkit-archive-keyring/"*.deb)
+dpkg-deb -x "${rotation_package[0]}" "$work_dir/staged-keyring"
+cmp "$work_dir/rotation-keyring.gpg" "$work_dir/staged-keyring/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg"
+# Une machine ayant reçu le trousseau transitoire accepte la nouvelle clé ;
+# une machine qui ne connaît que l'ancienne ne doit pas l'accepter.
+gpg --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --import "$work_dir/next-signing-key.gpg"
+bash packaging/build-apt-repository.sh "$work_dir/release-input" "$work_dir/new-repo" "$next_fingerprint" "${rotation_package[0]}"
+printf 'deb [arch=%s signed-by=%s] file:%s stable main\n' "$arch" "$work_dir/public-keyring.gpg" "$work_dir/new-repo" > "$work_dir/sources.list"
+if update_test_apt > "$work_dir/old-key.log" 2>&1 && ! grep -q 'NO_PUBKEY' "$work_dir/old-key.log"; then
+  echo 'La nouvelle signature ne doit pas être acceptée avec la seule ancienne clé.' >&2; exit 1
+fi
+grep -q 'NO_PUBKEY' "$work_dir/old-key.log"
+printf 'deb [arch=%s signed-by=%s] file:%s stable main\n' "$arch" "$work_dir/rotation-keyring.gpg" "$work_dir/new-repo" > "$work_dir/sources.list"
+update_test_apt > "$work_dir/rotation-update.log" 2>&1
+if grep -q 'NO_PUBKEY' "$work_dir/rotation-update.log"; then
+  echo 'Le trousseau de transition doit accepter la nouvelle signature.' >&2; exit 1
+fi
 grep -q "$fingerprint" "$work_dir/staged/install.sh"
 test -s "$work_dir/staged/apt/dists/stable/InRelease"
 grep -q 'Content-Type: text/plain; charset=utf-8' "$work_dir/staged/_headers"

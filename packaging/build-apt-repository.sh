@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 3 ]]; then
-  echo "Usage: $0 PACKAGES_DIR OUTPUT_DIR SIGNING_KEY_FINGERPRINT" >&2
+if [[ $# -ne 3 && $# -ne 4 ]]; then
+  echo "Usage: $0 PACKAGES_DIR OUTPUT_DIR SIGNING_KEY_FINGERPRINT [KEYRING_DEB]" >&2
   exit 2
 fi
 packages_dir="$1"
@@ -38,6 +38,12 @@ for package in "${packages[@]}"; do
 done
 mkdir -p "$output_dir/pool/main/m/myeasytoolkit" "$output_dir/dists/stable/main/binary-amd64" "$output_dir/dists/stable/main/binary-arm64"
 cp "${packages[@]}" "$output_dir/pool/main/m/myeasytoolkit/"
+if [[ $# -eq 4 ]]; then
+  keyring_deb="$4"
+  [[ -f "$keyring_deb" && "$(dpkg-deb -f "$keyring_deb" Package)" == myeasytoolkit-archive-keyring && "$(dpkg-deb -f "$keyring_deb" Architecture)" == all ]] || { echo 'Paquet de clés invalide.' >&2; exit 1; }
+  mkdir -p "$output_dir/pool/main/m/myeasytoolkit-archive-keyring"
+  cp "$keyring_deb" "$output_dir/pool/main/m/myeasytoolkit-archive-keyring/"
+fi
 (
   cd "$output_dir"
   for arch in amd64 arm64; do

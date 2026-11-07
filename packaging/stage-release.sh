@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 3 ]]; then
-  echo "Usage: $0 ARTIFACTS_DIR OUTPUT_DIR SIGNING_KEY_FINGERPRINT" >&2
+if [[ $# -ne 3 && $# -ne 6 ]]; then
+  echo "Usage: $0 ARTIFACTS_DIR OUTPUT_DIR SIGNING_KEY_FINGERPRINT [PUBLIC_KEYRING FINGERPRINTS_CSV KEYRING_VERSION]" >&2
   exit 2
 fi
 artifacts_dir="$1"
@@ -43,7 +43,24 @@ for file in "${files[@]}"; do
   cp "$artifacts_dir/$file" "$output_dir/releases/latest/$file"
   (cd "$output_dir/releases/latest" && sha256sum "$file" > "$file.sha256")
 done
-bash packaging/build-apt-repository.sh "$artifacts_dir" "$output_dir/apt" "$fingerprint"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+keyring_work="$(mktemp -d)"
+trap 'rm -rf "$keyring_work"' EXIT
+if [[ $# -eq 6 ]]; then
+  cp "$4" "$keyring_work/public.gpg"
+  keyring_fingerprints="$5"
+  keyring_version="$6"
+else
+  gpg --batch --export "$fingerprint" > "$keyring_work/public.gpg"
+  keyring_fingerprints="$fingerprint"
+  keyring_version="$version"
+fi
+case ",$keyring_fingerprints," in
+  *",$fingerprint,"*) ;;
+  *) echo 'La clé de signature doit être présente dans le paquet de clés.' >&2; exit 1 ;;
+esac
+(cd "$keyring_work" && bash "$repo_root/packaging/build-archive-keyring-deb.sh" public.gpg "$keyring_fingerprints" "$keyring_version")
+bash packaging/build-apt-repository.sh "$artifacts_dir" "$output_dir/apt" "$fingerprint" "$keyring_work/dist/keyring/myeasytoolkit-archive-keyring_${keyring_version}_all.deb"
 sign_args=(--batch --yes --local-user "$fingerprint")
 if [[ -n "${MET_GPG_PASSPHRASE_FILE:-}" ]]; then
   sign_args+=(--pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE")
