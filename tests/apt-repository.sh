@@ -27,7 +27,7 @@ update_test_apt() {
 }
 # Reproduire la notification multiarchitecture, puis vérifier qu'elle disparaît
 # lorsque la source utilise le filtre fourni par l'installateur.
-printf 'deb [signed-by=%s] file:%s stable main\n' "$work_dir/repo/myeasytoolkit-archive-keyring.gpg" "$work_dir/repo" > "$work_dir/sources.list"
+printf 'deb [arch=%s,i386 signed-by=%s] file:%s stable main\n' "$arch" "$work_dir/repo/myeasytoolkit-archive-keyring.gpg" "$work_dir/repo" > "$work_dir/sources.list"
 update_test_apt | tee "$work_dir/apt-unrestricted.log"
 grep -q 'binary-i386' "$work_dir/apt-unrestricted.log"
 printf 'deb [arch=%s signed-by=%s] file:%s stable main\n' "$arch" "$work_dir/repo/myeasytoolkit-archive-keyring.gpg" "$work_dir/repo" > "$work_dir/sources.list"
