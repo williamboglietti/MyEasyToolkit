@@ -42,7 +42,8 @@ printf '%s\n' "$TEST_APT_ARCH"
 MOCK
 cat > "$work_dir/bin/gpg" <<'MOCK'
 #!/usr/bin/env bash
-printf 'pub:::::::::\nfpr:::::::::%s:\n' "$TEST_FINGERPRINT"
+printf 'pub:::::::::\nfpr:::::::::%s:\nsub:::::::::\nfpr:::::::::%s:\n' "$TEST_FINGERPRINT" "${TEST_PUBLIC_SIGNER_FINGERPRINT:-$TEST_SIGNER_FINGERPRINT}"
+if [[ -n "${TEST_EXTRA_SUBKEY:-}" ]]; then printf 'sub:::::::::\nfpr:::::::::%s:\n' "$TEST_EXTRA_SUBKEY"; fi
 MOCK
 cat > "$work_dir/bin/sudo" <<'MOCK'
 #!/usr/bin/env bash
@@ -63,17 +64,34 @@ printf '%s\n' "$*" >> "$TEST_APT_CALLS"
 MOCK
 chmod +x "$work_dir/bin/dpkg" "$work_dir/bin/gpg" "$work_dir/bin/sudo" "$work_dir/bin/install" "$work_dir/bin/apt-get"
 export TEST_OS=Linux TEST_FINGERPRINT=3DDACB1CAEC51E8466DB12456A0AFA48DB9C62D5
+export TEST_SIGNER_FINGERPRINT=1111111111111111111111111111111111111111
 export TEST_OUTPUT="$work_dir/source.list" TEST_APT_CALLS="$work_dir/apt-calls"
 printf 'test key\n' > "$FIXTURE/myeasytoolkit-archive-keyring.gpg"
-sed "s/__APT_FINGERPRINT__/$TEST_FINGERPRINT/" installers/install.sh > "$work_dir/install.sh"
+sed -e "s/__APT_FINGERPRINT__/$TEST_FINGERPRINT/" -e "s/__APT_SIGNER_FINGERPRINT__/$TEST_SIGNER_FINGERPRINT/" installers/install.sh > "$work_dir/install.sh"
 for TEST_APT_ARCH in amd64 arm64; do
   export TEST_APT_ARCH
   : > "$TEST_APT_CALLS"
   bash "$work_dir/install.sh"
   grep -Fx "deb [arch=$TEST_APT_ARCH signed-by=/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg] https://packages.myeasytoolkit.com/apt stable main" "$TEST_OUTPUT"
   grep -Fx 'update' "$TEST_APT_CALLS"
-  grep -Fx 'install -y myeasytoolkit' "$TEST_APT_CALLS"
+  grep -Fx 'install -y myeasytoolkit-archive-keyring myeasytoolkit' "$TEST_APT_CALLS"
 done
+export TEST_PUBLIC_SIGNER_FINGERPRINT=2222222222222222222222222222222222222222
+: > "$TEST_APT_CALLS"
+if bash "$work_dir/install.sh"; then
+  echo 'Un trousseau sans le signataire attendu aurait dû être refusé.' >&2
+  exit 1
+fi
+[[ ! -s "$TEST_APT_CALLS" ]]
+unset TEST_PUBLIC_SIGNER_FINGERPRINT
+export TEST_EXTRA_SUBKEY=3333333333333333333333333333333333333333
+: > "$TEST_APT_CALLS"
+if bash "$work_dir/install.sh"; then
+  echo 'Un trousseau contenant une sous-clé inattendue aurait dû être refusé.' >&2
+  exit 1
+fi
+[[ ! -s "$TEST_APT_CALLS" ]]
+unset TEST_EXTRA_SUBKEY
 TEST_APT_ARCH=i386
 export TEST_APT_ARCH
 : > "$TEST_APT_CALLS"

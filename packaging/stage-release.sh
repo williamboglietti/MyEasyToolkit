@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 3 ]]; then
-  echo "Usage: $0 ARTIFACTS_DIR OUTPUT_DIR SIGNING_KEY_FINGERPRINT" >&2
+if [[ $# -ne 3 && $# -ne 6 ]]; then
+  echo "Usage: $0 ARTIFACTS_DIR OUTPUT_DIR SIGNING_KEY_FINGERPRINT [PUBLIC_KEYRING FINGERPRINTS_CSV KEYRING_VERSION]" >&2
   exit 2
 fi
 artifacts_dir="$1"
@@ -43,8 +43,55 @@ for file in "${files[@]}"; do
   cp "$artifacts_dir/$file" "$output_dir/releases/latest/$file"
   (cd "$output_dir/releases/latest" && sha256sum "$file" > "$file.sha256")
 done
-bash packaging/build-apt-repository.sh "$artifacts_dir" "$output_dir/apt" "$fingerprint"
-sign_args=(--batch --yes --local-user "$fingerprint")
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+keyring_work="$(mktemp -d)"
+trap 'rm -rf "$keyring_work"' EXIT
+if [[ $# -eq 6 ]]; then
+  cp "$4" "$keyring_work/public.gpg"
+  keyring_fingerprints="$5"
+  keyring_version="$6"
+else
+  gpg --batch --export "$fingerprint" > "$keyring_work/public.gpg"
+  keyring_fingerprints="$fingerprint"
+  keyring_version="$version"
+fi
+case ",$keyring_fingerprints," in
+  *",$fingerprint,"*) ;;
+  *) echo 'La clé de signature doit être présente dans le paquet de clés.' >&2; exit 1 ;;
+esac
+MET_APT_SUITE=stable bash packaging/build-apt-repository.sh "$artifacts_dir" "$keyring_work/probe" "$fingerprint"
+apt_keyring="$keyring_work/probe/myeasytoolkit-archive-keyring.gpg"
+signer="$(gpgv --status-fd 1 --keyring "$apt_keyring" "$keyring_work/probe/dists/stable/InRelease" 2>/dev/null | awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print $3 }')"
+[[ "$signer" =~ ^[A-F0-9]{40}$ ]] || { echo 'Empreinte du signataire APT invalide.' >&2; exit 1; }
+allowed_subkeys="${MET_APT_ALLOWED_SUBKEYS:-$signer}"
+[[ "$allowed_subkeys" =~ ^[A-F0-9]{40}(,[A-F0-9]{40})*$ ]] || { echo 'Liste de signataires autorisés invalide.' >&2; exit 1; }
+case ",$allowed_subkeys," in *",$signer,"*) ;; *) echo 'Le signataire courant doit être autorisé.' >&2; exit 1 ;; esac
+mkdir -m 700 "$keyring_work/public-home"
+LC_ALL=C gpg --homedir "$keyring_work/public-home" --batch --list-packets "$keyring_work/public.gpg" > "$keyring_work/public-packets"
+if grep -Eq '^:secret (sub )?key packet:' "$keyring_work/public-packets"; then
+  echo 'Le trousseau de publication ne doit pas contenir de clé privée.' >&2; exit 1
+fi
+gpg --homedir "$keyring_work/public-home" --batch --import "$keyring_work/public.gpg"
+gpg --homedir "$keyring_work/public-home" --batch --with-colons --with-fingerprint --with-subkey-fingerprint --list-keys > "$keyring_work/public-info"
+IFS=, read -r -a allowed <<< "$allowed_subkeys"
+export_args=()
+for allowed_key in "${allowed[@]}"; do
+  awk -F: -v expected="$allowed_key" '$1 == "fpr" && $10 == expected { found=1 } END { exit !found }' "$keyring_work/public-info" || { echo 'Signataire autorisé absent du trousseau.' >&2; exit 1; }
+  export_args+=("$allowed_key!")
+done
+# Les clés principales indépendantes capables de signer peuvent assurer une
+# transition entre deux certificats ; leurs empreintes sont déclarées en entrée.
+IFS=, read -r -a primary_keys <<< "$keyring_fingerprints"
+for primary_key in "${primary_keys[@]}"; do
+  if gpg --homedir "$keyring_work/public-home" --batch --with-colons --list-keys "$primary_key" | awk -F: '$1 == "pub" && index($12, "s") { found=1 } END { exit !found }'; then
+    export_args+=("$primary_key!")
+  fi
+done
+gpg --homedir "$keyring_work/public-home" --batch --export "${export_args[@]}" > "$keyring_work/filtered.gpg"
+gpgv --keyring "$keyring_work/filtered.gpg" "$keyring_work/probe/dists/stable/InRelease"
+(cd "$keyring_work" && bash "$repo_root/packaging/build-archive-keyring-deb.sh" filtered.gpg "$keyring_fingerprints" "$keyring_version")
+MET_APT_SUITE=stable bash packaging/build-apt-repository.sh "$artifacts_dir" "$output_dir/apt" "$fingerprint" "$keyring_work/dist/keyring/myeasytoolkit-archive-keyring_${keyring_version}_all.deb"
+sign_args=(--batch --yes --local-user "$signer!")
 if [[ -n "${MET_GPG_PASSPHRASE_FILE:-}" ]]; then
   sign_args+=(--pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE")
 fi
@@ -55,7 +102,7 @@ for arch in amd64 arm64; do
   gpgv --keyring "$output_dir/apt/myeasytoolkit-archive-keyring.gpg" "$asset.asc" "$asset"
   (cd "$output_dir/releases/latest" && sha256sum "$(basename "$asset")" > "$(basename "$asset").sha256")
 done
-sed "s/__APT_FINGERPRINT__/$fingerprint/" installers/install.sh > "$output_dir/install.sh"
+sed -e "s/__APT_FINGERPRINT__/$fingerprint/" -e "s/__APT_SIGNER_FINGERPRINT__/$signer/" installers/install.sh > "$output_dir/install.sh"
 cp installers/install.ps1 "$output_dir/install.ps1"
 cat > "$output_dir/_headers" <<'HEADERS'
 /install.sh
