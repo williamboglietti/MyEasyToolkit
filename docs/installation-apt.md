@@ -2,6 +2,13 @@
 
 Cette procédure concerne Debian et Ubuntu sur les architectures `amd64` et `arm64`. Elle nécessite que la version comprenant le paquet `myeasytoolkit-archive-keyring` ait été publiée ; sa préparation dans le dépôt de sources ne signifie pas qu'elle est déjà disponible en ligne.
 
+Empreintes prévues pour la prochaine publication de production :
+
+- Clé principale : `A414D87A2177A956136013ABB0E0AB253511A2E4`.
+- Sous-clé stable : `2EA0195379DBCEAA17B69B0D660BE4A46617BD54`.
+
+Ces nouvelles empreintes ne remplacent pas automatiquement la clé déjà installée. Une machine faisant confiance à l'ancienne clé de test peut nécessiter une réinstallation manuelle du trousseau après la publication.
+
 1. Installer les outils nécessaires et télécharger la clé publique dans un répertoire temporaire :
 
    ```bash
