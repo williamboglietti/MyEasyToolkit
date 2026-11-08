@@ -1,0 +1,17 @@
+name: Verify distribution signing key
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify signing without publishing
+        shell: bash
+        env:
+          SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+          SIGNING_PASSPHRASE: ${{ secrets.APT_SIGNING_PASSPHRASE }}
+        run: bash tests/verify-signing-secret.sh
