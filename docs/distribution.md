@@ -1,15 +1,17 @@
 # Préparer une publication
 
-Le workflow « Publish validated release » est lancé manuellement sur `main`. Il exige une exécution réussie du workflow CI sur le commit courant, construit les binaires et les deux paquets Debian, génère les métadonnées APT signées et publie le Worker Cloudflare. La page `web/download.html` doit être présente avant la publication.
+Le workflow « Publish validated release » peut être lancé manuellement sur `main`. Le lancement automatique après une CI réussie sur `main` est désactivé tant que la variable Actions `DISTRIBUTION_AUTO_PUBLISH` n'est pas définie à `true`. Il refuse de publier si le commit validé n’est plus la tête de `main`, construit les binaires et les deux paquets Debian, génère le dépôt APT, signe l’ensemble de distribution et demande au dépôt MyEasyToolkit.com de le publier.
 
 La publication exige :
 
 - une sous-clé OpenPGP de signature dédiée : son export privé ASCII protégé est placé dans le secret Actions `APT_SIGNING_KEY` et sa phrase secrète dans `APT_SIGNING_PASSPHRASE`. La clé principale privée reste hors de la CI. La nouvelle clé et la transition de confiance APT sont traitées séparément ;
-- le secret Actions `CLOUDFLARE_API_TOKEN`, limité aux permissions nécessaires au Worker, aux routes et aux domaines ;
-- la variable Actions `CLOUDFLARE_ACCOUNT_ID` ;
-- la zone `myeasytoolkit.com` sur le compte Cloudflare et les domaines prévus disponibles.
+- le secret Actions `SITE_DEPLOY_TOKEN`, limité au dépôt MyEasyToolkit.com avec la permission Actions en écriture ;
+- le site doit disposer de ses propres accès Cloudflare, d’une CI verte sur sa branche principale et d'un runner de déploiement disponible ;
+- les deux dépôts doivent contenir le même trousseau public de production. Activer ensuite `DISTRIBUTION_AUTO_PUBLISH` seulement après validation du parcours complet.
 
-Ne jamais committer de clé privée ou de phrase secrète. L'installateur shell publié incorpore l'empreinte de la clé qui a signé les métadonnées APT ; si elle change, les installations existantes doivent faire l'objet d'une procédure de rotation explicite. Les URL de publication sont servies par des assets Workers. Le domaine principal ne reçoit que les deux routes d'installation indiquées dans `web/wrangler.jsonc`.
+Ne jamais committer de clé privée ou de phrase secrète. L'installateur shell publié incorpore l'empreinte de la clé qui a signé les métadonnées APT ; si elle change, les installations existantes doivent faire l'objet d'une procédure de rotation explicite. Les URL de publication sont servies par le Worker du dépôt [MyEasyToolkit.com](https://github.com/williamboglietti/MyEasyToolkit.com).
+
+Le workflow manuel « Verify distribution signing key » vérifie sur `main` les deux secrets de signature, l'absence de clé principale privée, leur correspondance avec le trousseau public et l'accès du jeton au workflow du site, sans créer de version ni déployer de site. La lecture du workflow ne prouve pas que le jeton pourra le déclencher ; ce droit doit aussi être vérifié lors de la réception du parcours de publication.
 
 `bash packaging/build-apt-repository.sh REPERTOIRE_PAQUETS SORTIE EMPREINTE [PAQUET_CLES.deb]` construit un dépôt APT dans un répertoire encore inexistant. La variable `MET_GPG_PASSPHRASE_FILE` peut désigner un fichier de phrase secrète pour les clés protégées. `bash tests/apt-repository.sh` utilise uniquement des clés éphémères et des fichiers de test sur Linux.
 
@@ -60,6 +62,6 @@ vérifier l'empreinte ne permet pas, à lui seul, d'authentifier l'éditeur.
 Ni `apt install ./paquet.deb` ni `dpkg -i` ne vérifie automatiquement ce fichier
 de signature détachée.
 
-La route `/` de `get.myeasytoolkit.com` reconnaît PowerShell et les navigateurs ; les autres clients reçoivent l'installateur shell, qui détecte lui-même la plateforme. Les en-têtes HTTP ne permettent pas de déduire fiablement le système d'exploitation de tous les clients.
+Le routage des installateurs et du site est documenté dans le dépôt MyEasyToolkit.com.
 
 La clé publique et son empreinte sont versionnées dans `packaging/`. La publication refuse une clé privée qui ne correspond pas à cette empreinte. Prévoir la rotation avant l'expiration des clés et la distribution de la nouvelle confiance aux installations existantes.
