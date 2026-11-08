@@ -1,12 +1,13 @@
 # Préparer une publication
 
-Le workflow « Publish validated release » démarre automatiquement après une CI réussie sur `main`, et peut aussi être lancé manuellement sur `main`. Il refuse de publier si le commit validé n’est plus la tête de `main`, construit les binaires et les deux paquets Debian, génère le dépôt APT, signe l’ensemble de distribution et demande au dépôt MyEasyToolkit.com de le publier.
+Le workflow « Publish validated release » peut être lancé manuellement sur `main`. Le lancement automatique après une CI réussie sur `main` est désactivé tant que la variable Actions `DISTRIBUTION_AUTO_PUBLISH` n'est pas définie à `true`. Il refuse de publier si le commit validé n’est plus la tête de `main`, construit les binaires et les deux paquets Debian, génère le dépôt APT, signe l’ensemble de distribution et demande au dépôt MyEasyToolkit.com de le publier.
 
 La publication exige :
 
 - une sous-clé OpenPGP de signature dédiée : son export privé ASCII protégé est placé dans le secret Actions `APT_SIGNING_KEY` et sa phrase secrète dans `APT_SIGNING_PASSPHRASE`. La clé principale privée reste hors de la CI. La nouvelle clé et la transition de confiance APT sont traitées séparément ;
 - le secret Actions `SITE_DEPLOY_TOKEN`, limité au dépôt MyEasyToolkit.com avec la permission Actions en écriture ;
-- le site doit disposer de ses propres accès Cloudflare et d’une CI verte sur sa branche principale.
+- le site doit disposer de ses propres accès Cloudflare, d’une CI verte sur sa branche principale et d'un runner de déploiement disponible ;
+- les deux dépôts doivent contenir le même trousseau public de production. Activer ensuite `DISTRIBUTION_AUTO_PUBLISH` seulement après validation du parcours complet.
 
 Ne jamais committer de clé privée ou de phrase secrète. L'installateur shell publié incorpore l'empreinte de la clé qui a signé les métadonnées APT ; si elle change, les installations existantes doivent faire l'objet d'une procédure de rotation explicite. Les URL de publication sont servies par le Worker du dépôt [MyEasyToolkit.com](https://github.com/williamboglietti/MyEasyToolkit.com).
 

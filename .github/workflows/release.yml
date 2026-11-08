@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-22.04
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' &&
+      (github.event_name == 'workflow_run' && vars.DISTRIBUTION_AUTO_PUBLISH == 'true' && github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success')
     outputs:
       revision: ${{ steps.revision.outputs.revision }}
@@ -35,6 +35,15 @@ jobs:
           export MAIN_REVISION SUCCESSFUL_CI_COUNT
           revision="$(bash packaging/validate-release-revision.sh)"
           printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+      - name: Verify access to the site deployment workflow
+        env:
+          GH_TOKEN: ${{ secrets.SITE_DEPLOY_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$GH_TOKEN" ]] || { echo 'Secret SITE_DEPLOY_TOKEN absent.' >&2; exit 1; }
+          state="$(gh api repos/williamboglietti/MyEasyToolkit.com/actions/workflows/deploy.yml --jq '.state')"
+          [[ "$state" == active ]] || { echo 'Workflow de déploiement du site indisponible.' >&2; exit 1; }
   build:
     needs: validate
     strategy:
