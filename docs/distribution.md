@@ -23,6 +23,10 @@ Ce paquet contient uniquement le trousseau public et ne configure aucun hook APT
 
 La publication automatisée utilise actuellement l'appel à trois paramètres et prépare un trousseau à une seule clé. Pour publier une transition à deux clés, il faudra adapter et tester la chaîne de publication avec les paramètres supplémentaires avant de changer la clé de signature ; cette préparation ne rend pas la rotation automatique.
 
+L'installateur généré vérifie que le trousseau initial contient uniquement le signataire stable prévu. La source APT référence ce fichier sans épingler d'empreinte dans la source : cela permet au paquet de clés de préparer une rotation. Le trousseau fourni par le paquet est construit à partir des seules sous-clés de production explicitement autorisées. Les installations préexistantes nécessitent une migration distincte et vérifiée.
+
+La préparation du [canal de test](apt-canaux.md) est distincte de sa publication, qui n'est pas activée par ce changement.
+
 Les étapes d'[installation manuelle](installation-apt.md) et de [réponse à une compromission](incident-cle-apt.md) s'appliquent après validation et publication effectives de cette version. Aucune clé de production ni migration n'est réalisée par leur préparation.
 
 ## Télécharger et vérifier un paquet Debian
