@@ -118,6 +118,9 @@ if dpkg-deb -c "${keyring_package[0]}" | grep -q '/etc/apt/'; then
   echo 'Le paquet de clés ne doit pas installer de configuration APT.' >&2; exit 1
 fi
 bash packaging/stage-release.sh "$work_dir/release-input" "$work_dir/staged-rotation" "$fingerprint" "$work_dir/rotation-keyring.gpg" "$fingerprint,$next_fingerprint" 1.1
+if bash packaging/stage-release.sh "$work_dir/release-input" "$work_dir/staged-private" "$fingerprint" "$work_dir/private-keyring.gpg" "$fingerprint" 1.1 >/dev/null 2>&1; then
+  echo 'La publication doit refuser un trousseau contenant une clé privée.' >&2; exit 1
+fi
 rotation_package=("$work_dir/staged-rotation/apt/pool/main/m/myeasytoolkit-archive-keyring/"*.deb)
 dpkg-deb -x "${rotation_package[0]}" "$work_dir/staged-keyring"
 cmp "$work_dir/rotation-keyring.gpg" "$work_dir/staged-keyring/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg"

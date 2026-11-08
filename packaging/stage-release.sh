@@ -67,6 +67,10 @@ allowed_subkeys="${MET_APT_ALLOWED_SUBKEYS:-$signer}"
 [[ "$allowed_subkeys" =~ ^[A-F0-9]{40}(,[A-F0-9]{40})*$ ]] || { echo 'Liste de signataires autorisés invalide.' >&2; exit 1; }
 case ",$allowed_subkeys," in *",$signer,"*) ;; *) echo 'Le signataire courant doit être autorisé.' >&2; exit 1 ;; esac
 mkdir -m 700 "$keyring_work/public-home"
+LC_ALL=C gpg --homedir "$keyring_work/public-home" --batch --list-packets "$keyring_work/public.gpg" > "$keyring_work/public-packets"
+if grep -Eq '^:secret (sub )?key packet:' "$keyring_work/public-packets"; then
+  echo 'Le trousseau de publication ne doit pas contenir de clé privée.' >&2; exit 1
+fi
 gpg --homedir "$keyring_work/public-home" --batch --import "$keyring_work/public.gpg"
 gpg --homedir "$keyring_work/public-home" --batch --with-colons --with-fingerprint --with-subkey-fingerprint --list-keys > "$keyring_work/public-info"
 IFS=, read -r -a allowed <<< "$allowed_subkeys"
