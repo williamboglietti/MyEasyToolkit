@@ -31,13 +31,15 @@ if [[ "$(uname -s)" == Linux ]] && command -v apt-get >/dev/null; then
     run_root apt-get install -y gnupg ca-certificates
   fi
   curl -fsSL "$base_url/apt/myeasytoolkit-archive-keyring.gpg" -o "$work_dir/keyring.gpg"
-  gpg --batch --show-keys --with-colons "$work_dir/keyring.gpg" > "$work_dir/key-info"
+  gpg --batch --with-subkey-fingerprint --show-keys --with-colons "$work_dir/keyring.gpg" > "$work_dir/key-info"
   actual_fingerprint="$(awk -F: '$1 == "fpr" { print $10; exit }' "$work_dir/key-info")"
   primary_count="$(awk -F: '$1 == "pub" { count++ } END { print count+0 }' "$work_dir/key-info")"
-  if [[ "$actual_fingerprint" != "$apt_fingerprint" || "$primary_count" != 1 ]] || ! awk -F: '$1 == "fpr" {print $10}' "$work_dir/key-info" | grep -Fxq "$apt_signer_fingerprint"; then
+  actual_subkeys="$(awk -F: '$1 == "sub" { subkey=1; next } subkey && $1 == "fpr" { print $10; subkey=0 }' "$work_dir/key-info")"
+  if [[ "$actual_fingerprint" != "$apt_fingerprint" || "$primary_count" != 1 ]] ||
+     ! { [[ "$apt_signer_fingerprint" == "$actual_fingerprint" && -z "$actual_subkeys" ]] || [[ "$actual_subkeys" == "$apt_signer_fingerprint" ]]; }; then
     echo 'La clé du dépôt ne correspond pas à la clé attendue.' >&2; exit 1
   fi
-  printf 'deb [arch=%s signed-by=/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg,%s!] %s/apt stable main\n' "$apt_arch" "$apt_signer_fingerprint" "$base_url" > "$work_dir/myeasytoolkit.list"
+  printf 'deb [arch=%s signed-by=/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg] %s/apt stable main\n' "$apt_arch" "$base_url" > "$work_dir/myeasytoolkit.list"
   run_root install -m 644 "$work_dir/keyring.gpg" /usr/share/keyrings/myeasytoolkit-archive-keyring.gpg
   run_root install -m 644 "$work_dir/myeasytoolkit.list" /etc/apt/sources.list.d/myeasytoolkit.list
   run_root apt-get update

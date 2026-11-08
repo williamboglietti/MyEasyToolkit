@@ -76,6 +76,12 @@ fi
     release "dists/$suite" > "dists/$suite/Release"
   gpg "${sign_args[@]}" --clearsign --output "dists/$suite/InRelease" "dists/$suite/Release"
   gpg "${sign_args[@]}" --armor --detach-sign --output "dists/$suite/Release.gpg" "dists/$suite/Release"
-  gpg --batch --export "$signing_key" > myeasytoolkit-archive-keyring.gpg
+  actual_signer="$(gpg --batch --status-fd 1 --verify "dists/$suite/InRelease" 2>/dev/null | awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print $3 }')"
+  [[ "$actual_signer" =~ ^[A-F0-9]{40}$ ]] || { echo 'Signataire du dépôt non identifié.' >&2; exit 1; }
+  if [[ -n "$signing_subkey" && "$actual_signer" != "$signing_subkey" ]]; then
+    echo 'La signature ne correspond pas à la sous-clé sélectionnée.' >&2; exit 1
+  fi
+  # Exporter la clé principale et uniquement la sous-clé effectivement utilisée.
+  gpg --batch --export "$actual_signer!" > myeasytoolkit-archive-keyring.gpg
   test -s myeasytoolkit-archive-keyring.gpg
 )

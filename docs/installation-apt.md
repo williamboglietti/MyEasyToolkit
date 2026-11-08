@@ -19,11 +19,12 @@ Cette procédure concerne Debian et Ubuntu sur les architectures `amd64` et `arm
 
    ```bash
    met_signer='REMPLACER_PAR_EMPREINTE_STABLE_VERIFIEE'
-   if [[ "$met_signer" =~ ^[A-F0-9]{40}$ ]] && gpg --show-keys --with-colons "$met_tmp/keyring.gpg" | awk -F: '$1 == "fpr" {print $10}' | grep -Fxq "$met_signer"; then
+   met_subkeys="$(gpg --show-keys --with-colons --with-subkey-fingerprint "$met_tmp/keyring.gpg" | awk -F: '$1 == "sub" {s=1;next} s && $1 == "fpr" {print $10;s=0}')"
+   if [[ "$met_signer" =~ ^[A-F0-9]{40}$ && "$met_subkeys" == "$met_signer" ]]; then
      sudo install -d -m 755 /usr/share/keyrings /etc/apt/sources.list.d &&
      sudo install -m 644 "$met_tmp/keyring.gpg" /usr/share/keyrings/myeasytoolkit-archive-keyring.gpg &&
      met_arch="$(dpkg --print-architecture)" &&
-     printf 'deb [arch=%s signed-by=/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg,%s!] https://packages.myeasytoolkit.com/apt stable main\n' "$met_arch" "$met_signer" | sudo tee /etc/apt/sources.list.d/myeasytoolkit.list > /dev/null &&
+     printf 'deb [arch=%s signed-by=/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg] https://packages.myeasytoolkit.com/apt stable main\n' "$met_arch" | sudo tee /etc/apt/sources.list.d/myeasytoolkit.list > /dev/null &&
      sudo apt-get update && sudo apt-get install myeasytoolkit-archive-keyring myeasytoolkit
    else
      echo 'Empreinte de signature invalide ou absente du trousseau : installation interrompue.' >&2
@@ -32,4 +33,4 @@ Cette procédure concerne Debian et Ubuntu sur les architectures `amd64` et `arm
 
 Le paquet de clés gère ensuite le fichier référencé par `signed-by`. `apt update` actualise les listes ; `apt upgrade` ou l'installation explicite d'une nouvelle version installe les mises à jour, y compris celles du paquet de clés. Cette procédure ne configure aucun programme de vérification personnalisé à chaque appel d'APT.
 
-La source limite aussi la signature à la sous-clé stable précise. Lors d'une rotation de cette sous-clé, mettre à jour en toute sécurité la liste des empreintes autorisées dans la source APT avant le changement : la mise à jour du seul paquet de clés ne modifie pas automatiquement une empreinte épinglée dans le fichier `.list`.
+Cette procédure prévoit une clé principale de certification et une seule sous-clé stable dans le trousseau initial. Pour une rotation préparée, un paquet de clés peut distribuer temporairement l'ancienne et la nouvelle sous-clé de production, avant le changement de signature. Le trousseau stable ne doit jamais contenir une sous-clé de test. Une machine restée hors ligne pendant la transition peut nécessiter une intervention.

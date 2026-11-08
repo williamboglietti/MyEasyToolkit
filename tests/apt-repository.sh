@@ -139,6 +139,9 @@ grep -q "$fingerprint" "$work_dir/staged/install.sh"
 if grep -q '__APT_SIGNER_FINGERPRINT__' "$work_dir/staged/install.sh"; then
   echo "Le signataire précis doit être incorporé à l'installateur." >&2; exit 1
 fi
+bootstrap_signer="$(gpgv --status-fd 1 --keyring "$work_dir/staged/apt/myeasytoolkit-archive-keyring.gpg" "$work_dir/staged/apt/dists/stable/InRelease" 2>/dev/null | awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print $3 }')"
+bootstrap_subkeys="$(gpg --batch --with-colons --with-subkey-fingerprint --show-keys "$work_dir/staged/apt/myeasytoolkit-archive-keyring.gpg" | awk -F: '$1 == "sub" {s=1;next} s && $1 == "fpr" {print $10;s=0}')"
+[[ "$bootstrap_subkeys" == "$bootstrap_signer" ]]
 test -s "$work_dir/staged/apt/dists/stable/InRelease"
 grep -q 'Content-Type: text/plain; charset=utf-8' "$work_dir/staged/_headers"
 (cd "$work_dir/staged/releases/latest" && sha256sum -c ./*.sha256)
@@ -171,6 +174,31 @@ mkdir -m 700 "$work_dir/wrong-key-home"
 if gpgv --keyring "$work_dir/wrong-key.gpg" "$work_dir/staged/releases/latest/myeasytoolkit-linux-$arch.deb.asc" "$work_dir/staged/releases/latest/myeasytoolkit-linux-$arch.deb" >/dev/null 2>&1; then
   echo 'Une clé non approuvée ne doit pas valider le paquet.' >&2
   exit 1
+fi
+# Une CI contenant aussi des sous-clés de test ne doit jamais les inclure dans
+# le trousseau stable ; une rotation peut autoriser une autre sous-clé stable.
+gpg --homedir "$work_dir/gnupg" --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --quick-add-key "$fingerprint" ed25519 sign 1d
+gpg --homedir "$work_dir/gnupg" --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --quick-add-key "$fingerprint" ed25519 sign 1d
+mapfile -t subs < <(gpg --homedir "$work_dir/gnupg" --batch --with-colons --with-subkey-fingerprint --list-keys "$fingerprint" | awk -F: '$1 == "sub" { next_fpr=1; next } next_fpr && $1 == "fpr" { print $10; next_fpr=0 }')
+[[ ${#subs[@]} -eq 3 ]]
+gpg --homedir "$work_dir/gnupg" --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --export-secret-subkeys "$fingerprint" > "$work_dir/all-subkeys.gpg"
+mkdir -m 700 "$work_dir/all-signers"
+gpg --homedir "$work_dir/all-signers" --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --import "$work_dir/all-subkeys.gpg"
+MET_APT_SIGNING_SUBKEY="${subs[0]}" MET_APT_ALLOWED_SUBKEYS="${subs[0]},${subs[2]}" GNUPGHOME="$work_dir/all-signers" \
+  bash packaging/stage-release.sh "$work_dir/release-input" "$work_dir/staged-filtered" "$fingerprint"
+filtered_package=("$work_dir/staged-filtered/apt/pool/main/m/myeasytoolkit-archive-keyring/"*.deb)
+dpkg-deb -x "${filtered_package[0]}" "$work_dir/filtered-keyring"
+gpg --batch --with-colons --with-subkey-fingerprint --show-keys "$work_dir/filtered-keyring/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg" |
+  awk -F: '$1 == "sub" { next_fpr=1; next } next_fpr && $1 == "fpr" { print $10; next_fpr=0 }' | sort > "$work_dir/filtered-subkeys"
+printf '%s\n' "${subs[0]}" "${subs[2]}" | sort > "$work_dir/expected-subkeys"
+cmp "$work_dir/filtered-subkeys" "$work_dir/expected-subkeys"
+bootstrap_subkeys="$(gpg --batch --with-colons --with-subkey-fingerprint --show-keys "$work_dir/staged-filtered/apt/myeasytoolkit-archive-keyring.gpg" | awk -F: '$1 == "sub" {s=1;next} s && $1 == "fpr" {print $10;s=0}')"
+[[ "$bootstrap_subkeys" == "${subs[0]}" ]]
+printf 'Test de signature non autorisée\n' > "$work_dir/test-release"
+gpg --homedir "$work_dir/all-signers" --batch --yes --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" \
+  --local-user "${subs[1]}!" --output "$work_dir/test-release.sig" --detach-sign "$work_dir/test-release"
+if gpgv --keyring "$work_dir/filtered-keyring/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg" "$work_dir/test-release.sig" "$work_dir/test-release" >/dev/null 2>&1; then
+  echo 'Une sous-clé de test ne doit pas être acceptée par le trousseau stable.' >&2; exit 1
 fi
 cp "$work_dir/staged/releases/latest/myeasytoolkit-linux-$arch.deb" "$work_dir/release-input/duplicate.deb"
 if bash packaging/stage-release.sh "$work_dir/release-input" "$work_dir/duplicate" "$fingerprint" >/dev/null 2>&1; then

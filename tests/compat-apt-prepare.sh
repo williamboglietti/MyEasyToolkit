@@ -52,6 +52,8 @@ for algo in ed25519 rsa4096; do
       ' "$key_dir/$channel-secret-info"
       MET_APT_SUITE="$channel" MET_APT_SIGNING_SUBKEY="${channel_subkeys[$index]}" GNUPGHOME="$channel_home" \
         bash packaging/build-apt-repository.sh "$packages_dir" "$output_dir/channel-$channel" "$fingerprint"
+      actual_subkeys="$(gpg --batch --with-colons --with-subkey-fingerprint --show-keys "$output_dir/channel-$channel/myeasytoolkit-archive-keyring.gpg" | awk -F: '$1 == "sub" { next_fpr=1; next } next_fpr && $1 == "fpr" { print $10; next_fpr=0 }')"
+      [[ "$actual_subkeys" == "${channel_subkeys[$index]}" ]]
       actual="$(gpgv --status-fd 1 --keyring "$output_dir/channels.gpg" "$output_dir/channel-$channel/dists/$channel/InRelease" 2>/dev/null | awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print $3 }')"
       [[ "$actual" == "${channel_subkeys[$index]}" ]]
     done

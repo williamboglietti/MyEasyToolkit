@@ -43,6 +43,7 @@ MOCK
 cat > "$work_dir/bin/gpg" <<'MOCK'
 #!/usr/bin/env bash
 printf 'pub:::::::::\nfpr:::::::::%s:\nsub:::::::::\nfpr:::::::::%s:\n' "$TEST_FINGERPRINT" "${TEST_PUBLIC_SIGNER_FINGERPRINT:-$TEST_SIGNER_FINGERPRINT}"
+if [[ -n "${TEST_EXTRA_SUBKEY:-}" ]]; then printf 'sub:::::::::\nfpr:::::::::%s:\n' "$TEST_EXTRA_SUBKEY"; fi
 MOCK
 cat > "$work_dir/bin/sudo" <<'MOCK'
 #!/usr/bin/env bash
@@ -71,7 +72,7 @@ for TEST_APT_ARCH in amd64 arm64; do
   export TEST_APT_ARCH
   : > "$TEST_APT_CALLS"
   bash "$work_dir/install.sh"
-  grep -Fx "deb [arch=$TEST_APT_ARCH signed-by=/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg,$TEST_SIGNER_FINGERPRINT!] https://packages.myeasytoolkit.com/apt stable main" "$TEST_OUTPUT"
+  grep -Fx "deb [arch=$TEST_APT_ARCH signed-by=/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg] https://packages.myeasytoolkit.com/apt stable main" "$TEST_OUTPUT"
   grep -Fx 'update' "$TEST_APT_CALLS"
   grep -Fx 'install -y myeasytoolkit-archive-keyring myeasytoolkit' "$TEST_APT_CALLS"
 done
@@ -83,6 +84,14 @@ if bash "$work_dir/install.sh"; then
 fi
 [[ ! -s "$TEST_APT_CALLS" ]]
 unset TEST_PUBLIC_SIGNER_FINGERPRINT
+export TEST_EXTRA_SUBKEY=3333333333333333333333333333333333333333
+: > "$TEST_APT_CALLS"
+if bash "$work_dir/install.sh"; then
+  echo 'Un trousseau contenant une sous-clé inattendue aurait dû être refusé.' >&2
+  exit 1
+fi
+[[ ! -s "$TEST_APT_CALLS" ]]
+unset TEST_EXTRA_SUBKEY
 TEST_APT_ARCH=i386
 export TEST_APT_ARCH
 : > "$TEST_APT_CALLS"

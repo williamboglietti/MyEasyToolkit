@@ -23,7 +23,7 @@ Ce paquet contient uniquement le trousseau public et ne configure aucun hook APT
 
 La publication automatisée utilise actuellement l'appel à trois paramètres et prépare un trousseau à une seule clé. Pour publier une transition à deux clés, il faudra adapter et tester la chaîne de publication avec les paramètres supplémentaires avant de changer la clé de signature ; cette préparation ne rend pas la rotation automatique.
 
-L'installateur généré épingle aussi l'empreinte précise de la sous-clé qui a signé le dépôt stable. Avant une rotation de sous-clé, il faut préparer et distribuer une modification sûre de la source APT autorisant la remplaçante : mettre à jour uniquement le paquet de clés ne suffit pas. Les installations préexistantes qui ne possèdent pas cet épinglage nécessitent une migration distincte et vérifiée.
+L'installateur généré vérifie que le trousseau initial contient uniquement le signataire stable prévu. La source APT référence ce fichier sans épingler d'empreinte dans la source : cela permet au paquet de clés de préparer une rotation. Le trousseau fourni par le paquet est construit à partir des seules sous-clés de production explicitement autorisées. Les installations préexistantes nécessitent une migration distincte et vérifiée.
 
 La préparation du [canal de test](apt-canaux.md) est distincte de sa publication, qui n'est pas activée par ce changement.
 
