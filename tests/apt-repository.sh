@@ -11,6 +11,12 @@ export MET_GPG_PASSPHRASE_FILE="$work_dir/passphrase"
 gpg --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --quick-generate-key 'MyEasyToolkit CI <ci@example.invalid>' ed25519 cert 1d
 fingerprint="$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }')"
 gpg --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --quick-add-key "$fingerprint" ed25519 sign 1d
+if MET_APT_SUITE=testing bash packaging/build-apt-repository.sh dist "$work_dir/no-signer" "$fingerprint" >/dev/null 2>&1; then
+  echo 'Le canal test doit exiger une sous-clé explicite.' >&2; exit 1
+fi
+if MET_APT_SIGNING_SUBKEY=0000000000000000000000000000000000000000 bash packaging/build-apt-repository.sh dist "$work_dir/wrong-subkey" "$fingerprint" >/dev/null 2>&1; then
+  echo 'Une sous-clé absente doit être refusée.' >&2; exit 1
+fi
 gpg --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --quick-generate-key 'MyEasyToolkit next CI <next@example.invalid>' ed25519 sign 1d
 next_fingerprint="$(gpg --batch --with-colons --list-keys 'next@example.invalid' | awk -F: '$1 == "fpr" { print $10; exit }')"
 gpg --batch --export "$fingerprint" "$next_fingerprint" > "$work_dir/rotation-keyring.gpg"
@@ -130,6 +136,9 @@ if grep -q 'NO_PUBKEY' "$work_dir/rotation-update.log"; then
   echo 'Le trousseau de transition doit accepter la nouvelle signature.' >&2; exit 1
 fi
 grep -q "$fingerprint" "$work_dir/staged/install.sh"
+if grep -q '__APT_SIGNER_FINGERPRINT__' "$work_dir/staged/install.sh"; then
+  echo "Le signataire précis doit être incorporé à l'installateur." >&2; exit 1
+fi
 test -s "$work_dir/staged/apt/dists/stable/InRelease"
 grep -q 'Content-Type: text/plain; charset=utf-8' "$work_dir/staged/_headers"
 (cd "$work_dir/staged/releases/latest" && sha256sum -c ./*.sha256)

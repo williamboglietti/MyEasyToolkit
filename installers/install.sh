@@ -3,6 +3,7 @@ set -euo pipefail
 
 base_url='https://packages.myeasytoolkit.com'
 apt_fingerprint='__APT_FINGERPRINT__'
+apt_signer_fingerprint='__APT_SIGNER_FINGERPRINT__'
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
 
@@ -22,7 +23,7 @@ if [[ "$(uname -s)" == Linux ]] && command -v apt-get >/dev/null; then
     amd64|arm64) ;;
     *) echo "Architecture Debian non prise en charge : $apt_arch" >&2; exit 1 ;;
   esac
-  if [[ ! "$apt_fingerprint" =~ ^[A-F0-9]{40}$ ]]; then
+  if [[ ! "$apt_fingerprint" =~ ^[A-F0-9]{40}$ || ! "$apt_signer_fingerprint" =~ ^[A-F0-9]{40}$ ]]; then
     echo 'Installateur incomplet : empreinte de signature absente.' >&2; exit 1
   fi
   if ! command -v gpg >/dev/null; then
@@ -33,10 +34,10 @@ if [[ "$(uname -s)" == Linux ]] && command -v apt-get >/dev/null; then
   gpg --batch --show-keys --with-colons "$work_dir/keyring.gpg" > "$work_dir/key-info"
   actual_fingerprint="$(awk -F: '$1 == "fpr" { print $10; exit }' "$work_dir/key-info")"
   primary_count="$(awk -F: '$1 == "pub" { count++ } END { print count+0 }' "$work_dir/key-info")"
-  if [[ "$actual_fingerprint" != "$apt_fingerprint" || "$primary_count" != 1 ]]; then
+  if [[ "$actual_fingerprint" != "$apt_fingerprint" || "$primary_count" != 1 ]] || ! awk -F: '$1 == "fpr" {print $10}' "$work_dir/key-info" | grep -Fxq "$apt_signer_fingerprint"; then
     echo 'La clé du dépôt ne correspond pas à la clé attendue.' >&2; exit 1
   fi
-  printf 'deb [arch=%s signed-by=/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg] %s/apt stable main\n' "$apt_arch" "$base_url" > "$work_dir/myeasytoolkit.list"
+  printf 'deb [arch=%s signed-by=/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg,%s!] %s/apt stable main\n' "$apt_arch" "$apt_signer_fingerprint" "$base_url" > "$work_dir/myeasytoolkit.list"
   run_root install -m 644 "$work_dir/keyring.gpg" /usr/share/keyrings/myeasytoolkit-archive-keyring.gpg
   run_root install -m 644 "$work_dir/myeasytoolkit.list" /etc/apt/sources.list.d/myeasytoolkit.list
   run_root apt-get update

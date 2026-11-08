@@ -60,7 +60,10 @@ case ",$keyring_fingerprints," in
   *) echo 'La clé de signature doit être présente dans le paquet de clés.' >&2; exit 1 ;;
 esac
 (cd "$keyring_work" && bash "$repo_root/packaging/build-archive-keyring-deb.sh" public.gpg "$keyring_fingerprints" "$keyring_version")
-bash packaging/build-apt-repository.sh "$artifacts_dir" "$output_dir/apt" "$fingerprint" "$keyring_work/dist/keyring/myeasytoolkit-archive-keyring_${keyring_version}_all.deb"
+MET_APT_SUITE=stable bash packaging/build-apt-repository.sh "$artifacts_dir" "$output_dir/apt" "$fingerprint" "$keyring_work/dist/keyring/myeasytoolkit-archive-keyring_${keyring_version}_all.deb"
+apt_keyring="$(cd "$output_dir/apt" && pwd)/myeasytoolkit-archive-keyring.gpg"
+signer="$(gpgv --status-fd 1 --keyring "$apt_keyring" "$output_dir/apt/dists/stable/InRelease" 2>/dev/null | awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print $3 }')"
+[[ "$signer" =~ ^[A-F0-9]{40}$ ]] || { echo 'Empreinte du signataire APT invalide.' >&2; exit 1; }
 sign_args=(--batch --yes --local-user "$fingerprint")
 if [[ -n "${MET_GPG_PASSPHRASE_FILE:-}" ]]; then
   sign_args+=(--pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE")
@@ -72,7 +75,7 @@ for arch in amd64 arm64; do
   gpgv --keyring "$output_dir/apt/myeasytoolkit-archive-keyring.gpg" "$asset.asc" "$asset"
   (cd "$output_dir/releases/latest" && sha256sum "$(basename "$asset")" > "$(basename "$asset").sha256")
 done
-sed "s/__APT_FINGERPRINT__/$fingerprint/" installers/install.sh > "$output_dir/install.sh"
+sed -e "s/__APT_FINGERPRINT__/$fingerprint/" -e "s/__APT_SIGNER_FINGERPRINT__/$signer/" installers/install.sh > "$output_dir/install.sh"
 cp installers/install.ps1 "$output_dir/install.ps1"
 cat > "$output_dir/_headers" <<'HEADERS'
 /install.sh
