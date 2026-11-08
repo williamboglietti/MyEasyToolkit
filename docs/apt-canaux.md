@@ -8,7 +8,7 @@ Chaque source APT doit disposer d'un **fichier public de clés distinct** avec `
 
 Ne pas ajouter d'empreinte de sous-clé dans `signed-by` : cette fonctionnalité documentée par d'anciennes versions n'est pas compatible avec tous les vérificateurs APT récents. Chaque trousseau est limité lors de sa construction, et chaque canal n'accepte que son propre fichier.
 
-Par exemple, après avoir obtenu et vérifié le trousseau et l'empreinte de test par un canal de confiance, une source destinée à une machine `amd64` aurait cette forme. L'adresse et l'empreinte ci-dessous sont des **emplacements à remplacer**, pas un dépôt publié :
+Par exemple, après avoir obtenu et vérifié le trousseau et l'empreinte de test par un canal de confiance, une source destinée à une machine `amd64` aurait cette forme. L'adresse ci-dessous est un **emplacement à remplacer**, pas un dépôt publié :
 
 ```text
 deb [arch=amd64 signed-by=/usr/share/keyrings/myeasytoolkit-testing.gpg] https://EXEMPLE.invalid/ testing main
