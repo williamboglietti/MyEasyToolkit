@@ -8,6 +8,21 @@ mkdir -m 700 "$GNUPGHOME"
 printf 'ephemeral-test-passphrase' > "$work_dir/passphrase"
 chmod 600 "$work_dir/passphrase"
 export MET_GPG_PASSPHRASE_FILE="$work_dir/passphrase"
+# Le trousseau distribué doit correspondre à l'empreinte déclarée et ne
+# contenir que la sous-clé de signature stable, sans élément privé.
+LC_ALL=C gpg --batch --list-packets packaging/myeasytoolkit-archive-keyring.gpg > "$work_dir/committed-packets"
+if grep -Eq '^:secret (sub )?key packet:' "$work_dir/committed-packets"; then
+  echo 'Le trousseau APT ne doit pas contenir de clé privée.' >&2; exit 1
+fi
+gpg --batch --with-colons --with-subkey-fingerprint --show-keys packaging/myeasytoolkit-archive-keyring.gpg > "$work_dir/committed-keys"
+expected_primary="$(tr -d '\r\n' < packaging/archive-fingerprint.txt)"
+awk -F: -v expected="$expected_primary" '
+  $1 == "pub" { pubs++; kind="pub"; next }
+  $1 == "sub" { subs++; if (!index($12, "s")) exit 1; kind="sub"; next }
+  $1 == "fpr" && kind == "pub" { if ($10 != expected) exit 1; kind=""; next }
+  $1 == "fpr" && kind == "sub" { kind="" }
+  END { if (pubs != 1 || subs != 1) exit 1 }
+' "$work_dir/committed-keys" || { echo 'Trousseau APT de production incohérent.' >&2; exit 1; }
 gpg --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --quick-generate-key 'MyEasyToolkit CI <ci@example.invalid>' ed25519 cert 1d
 fingerprint="$(gpg --batch --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }')"
 gpg --batch --pinentry-mode loopback --passphrase-file "$MET_GPG_PASSPHRASE_FILE" --quick-add-key "$fingerprint" ed25519 sign 1d
