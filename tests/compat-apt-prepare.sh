@@ -30,6 +30,9 @@ for algo in ed25519 rsa4096; do
   if [[ "$algo" == rsa4096 ]]; then
     # Deux CI distinctes : chacune ne reçoit que sa propre sous-clé privée.
     gpg --batch --pinentry-mode loopback --passphrase '' --quick-add-key "$fingerprint" "$algo" sign 1d
+    if bash packaging/build-apt-repository.sh "$packages_dir" "$key_dir/ambiguous" "$fingerprint" >/dev/null 2>&1; then
+      echo 'Une CI contenant deux sous-clés doit exiger un signataire explicite.' >&2; exit 1
+    fi
     mapfile -t channel_subkeys < <(gpg --batch --with-colons --with-subkey-fingerprint --list-keys "$fingerprint" | awk -F: '$1 == "sub" { next_fpr=1; next } next_fpr && $1 == "fpr" { print $10; next_fpr=0 }')
     [[ ${#channel_subkeys[@]} -eq 2 && "${channel_subkeys[0]}" != "${channel_subkeys[1]}" ]]
     gpg --batch --export "$fingerprint" > "$output_dir/channels.gpg"

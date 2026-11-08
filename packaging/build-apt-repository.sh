@@ -28,6 +28,10 @@ if [[ -n "$signing_subkey" ]]; then
   sign_args=(--batch --yes --local-user "$signing_subkey!")
 else
   [[ "$suite" != testing ]] || { echo 'Le canal testing exige une sous-clé de signature explicite.' >&2; exit 1; }
+  if ! gpg --batch --with-colons --list-secret-keys "$signing_key" |
+    awk -F: '$1 == "ssb" && index($12, "s") && $15 != "#" { n++ } END { exit (n > 1) }'; then
+    echo 'Plusieurs sous-clés de signature disponibles : sélectionnez explicitement MET_APT_SIGNING_SUBKEY.' >&2; exit 1
+  fi
   sign_args=(--batch --yes --local-user "$signing_key")
 fi
 if [[ -n "${MET_GPG_PASSPHRASE_FILE:-}" ]]; then
