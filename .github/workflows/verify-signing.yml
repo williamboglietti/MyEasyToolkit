@@ -15,3 +15,12 @@ jobs:
           SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
           SIGNING_PASSPHRASE: ${{ secrets.APT_SIGNING_PASSPHRASE }}
         run: bash tests/verify-signing-secret.sh
+      - name: Verify access to site deployment workflow
+        env:
+          GH_TOKEN: ${{ secrets.SITE_DEPLOY_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$GH_TOKEN" ]] || { echo 'Secret SITE_DEPLOY_TOKEN absent.' >&2; exit 1; }
+          state="$(gh api repos/williamboglietti/MyEasyToolkit.com/actions/workflows/deploy.yml --jq '.state')"
+          [[ "$state" == active ]] || { echo 'Workflow de déploiement du site indisponible.' >&2; exit 1; }

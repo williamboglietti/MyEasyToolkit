@@ -11,7 +11,7 @@ La publication exige :
 
 Ne jamais committer de clé privée ou de phrase secrète. L'installateur shell publié incorpore l'empreinte de la clé qui a signé les métadonnées APT ; si elle change, les installations existantes doivent faire l'objet d'une procédure de rotation explicite. Les URL de publication sont servies par le Worker du dépôt [MyEasyToolkit.com](https://github.com/williamboglietti/MyEasyToolkit.com).
 
-Le workflow manuel « Verify distribution signing key » vérifie sur `main` les deux secrets de signature, l'absence de clé principale privée et leur correspondance avec le trousseau public, sans créer de version ni déployer de site.
+Le workflow manuel « Verify distribution signing key » vérifie sur `main` les deux secrets de signature, l'absence de clé principale privée, leur correspondance avec le trousseau public et l'accès du jeton au workflow du site, sans créer de version ni déployer de site. La lecture du workflow ne prouve pas que le jeton pourra le déclencher ; ce droit doit aussi être vérifié lors de la réception du parcours de publication.
 
 `bash packaging/build-apt-repository.sh REPERTOIRE_PAQUETS SORTIE EMPREINTE [PAQUET_CLES.deb]` construit un dépôt APT dans un répertoire encore inexistant. La variable `MET_GPG_PASSPHRASE_FILE` peut désigner un fichier de phrase secrète pour les clés protégées. `bash tests/apt-repository.sh` utilise uniquement des clés éphémères et des fichiers de test sur Linux.
 
