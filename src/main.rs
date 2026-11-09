@@ -2049,7 +2049,18 @@ mod input_tests {
                         #[cfg(not(target_arch = "x86_64"))]
                         continue;
                     }
-                    child.env("PATH", legacy_dir);
+                    child.env(
+                        "PATH",
+                        std::env::join_paths([
+                            legacy_dir,
+                            system_root.join("System32"),
+                            system_root,
+                        ])
+                        .unwrap(),
+                    );
+                    // GitHub runs cargo under pwsh 7, whose module path can
+                    // otherwise be inherited by Windows PowerShell 5.1.
+                    child.env_remove("PSModulePath");
                 }
                 let result = child.output().unwrap();
                 assert!(
@@ -2079,7 +2090,11 @@ mod input_tests {
                 ])
                 .output()
                 .unwrap();
-            assert!(result.status.success());
+            assert!(
+                result.status.success(),
+                "Get-ExecutionPolicy failed: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
             String::from_utf8_lossy(&result.stdout).trim().to_owned()
         };
         assert_eq!(parent_policy(), "Restricted");
