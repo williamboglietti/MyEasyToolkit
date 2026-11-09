@@ -2028,30 +2028,48 @@ mod input_tests {
         const MARKER: &str = "MET_POLICY_TEST_MARKER";
         if std::env::var_os(CHILD).is_none() {
             let dir = tempfile::tempdir().unwrap();
-            let marker = dir.path().join("script result.txt");
-            let result = Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "input_tests::powershell_executes_selected_scripts_under_a_restricted_parent_policy",
-                    "--nocapture",
-                ])
-                .env(CHILD, "1")
-                .env(MARKER, &marker)
-                .env("PSExecutionPolicyPreference", "Restricted")
-                .output()
-                .unwrap();
-            assert!(
-                result.status.success(),
-                "child test failed: {}\n{}",
-                String::from_utf8_lossy(&result.stdout),
-                String::from_utf8_lossy(&result.stderr)
-            );
+            for legacy in [false, true] {
+                let marker = dir.path().join("script result.txt");
+                let mut child = Command::new(std::env::current_exe().unwrap());
+                child
+                    .args([
+                        "--exact",
+                        "input_tests::powershell_executes_selected_scripts_under_a_restricted_parent_policy",
+                        "--nocapture",
+                    ])
+                    .env(CHILD, if legacy { "legacy" } else { "default" })
+                    .env(MARKER, &marker)
+                    .env("PSExecutionPolicyPreference", "Restricted");
+                if legacy {
+                    let system_root = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+                    let legacy_dir = system_root.join("System32/WindowsPowerShell/v1.0");
+                    if !legacy_dir.join("powershell.exe").is_file() {
+                        assert!(
+                            !cfg!(target_arch = "x86_64"),
+                            "Windows PowerShell 5.1 missing"
+                        );
+                        continue;
+                    }
+                    child.env("PATH", legacy_dir);
+                }
+                let result = child.output().unwrap();
+                assert!(
+                    result.status.success(),
+                    "child test failed (legacy={legacy}): {}\n{}",
+                    String::from_utf8_lossy(&result.stdout),
+                    String::from_utf8_lossy(&result.stderr)
+                );
+                std::fs::remove_file(marker).unwrap();
+            }
             return;
         }
 
         let interpreter = Interpreters::detect()
             .powershell
             .expect("PowerShell required");
+        if std::env::var(CHILD).unwrap() == "legacy" {
+            assert_eq!(interpreter.file_name().unwrap(), "powershell.exe");
+        }
         let parent_policy = || {
             let result = Command::new(&interpreter)
                 .args([
