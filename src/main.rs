@@ -2088,7 +2088,10 @@ mod input_tests {
         let local_result = std::fs::read_to_string(&marker).unwrap();
         let (policy, executed_path) = local_result.trim().split_once('|').unwrap();
         assert_eq!(policy, "Bypass");
-        assert_eq!(Path::new(executed_path), path);
+        assert_eq!(
+            std::fs::canonicalize(executed_path).unwrap(),
+            std::fs::canonicalize(&path).unwrap()
+        );
         std::fs::remove_file(&marker).unwrap();
         let remote = Entry {
             name: "script.ps1".into(),
