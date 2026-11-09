@@ -1423,7 +1423,9 @@ fn draw(frame: &mut Frame, app: &mut App) {
         " [t Filtre]  Compatibles"
     };
     frame.render_widget(
-        Paragraph::new(filter).style(focused(app.focus == Focus::Filter)),
+        Paragraph::new(filter).style(focused(
+            matches!(app.mode, Mode::Browsing) && app.focus == Focus::Filter,
+        )),
         areas.filter,
     );
     let items: Vec<ListItem> = app
@@ -2080,6 +2082,7 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
                     && x >= popup.x + 2
                     && x < popup.right() - 2
                 {
+                    app.dialog_focus = 2;
                     app.stop_on_error = !app.stop_on_error;
                 } else if popup.width > 4 && popup.height >= 6 && y == popup.bottom() - 2 {
                     let (primary, cancel, _) = dialog_buttons(popup.width, false);
