@@ -1060,11 +1060,16 @@ impl App {
                 _ => self.mode = Mode::ConfirmBatch,
             },
             Mode::Message => {
-                self.mode = if self.current.is_some() {
-                    Mode::Browsing
-                } else {
-                    Mode::Url
-                };
+                self.mode =
+                    if matches!(key.code, KeyCode::Enter | KeyCode::Esc | KeyCode::Char(' ')) {
+                        if self.current.is_some() {
+                            Mode::Browsing
+                        } else {
+                            Mode::Url
+                        }
+                    } else {
+                        Mode::Message
+                    };
             }
         }
         true
@@ -1883,7 +1888,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 " Confirmer l’exécution ",
                 format!("{}\n\nExécuter ce script ?", location_label(&entry.url)),
             )),
-            Mode::Message => Some((" Information ", format!("{}\n\n[Fermer]", app.message))),
+            Mode::Message => Some((" Information ", app.message.clone())),
             _ => None,
         };
         if let Some((title, text)) = prompt {
@@ -1898,6 +1903,12 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 ),
                 popup,
             );
+            if matches!(app.mode, Mode::Message) && popup.width > 4 && popup.height >= 5 {
+                frame.render_widget(
+                    Paragraph::new("[Fermer]").style(focused(true)),
+                    Rect::new(popup.x + 2, popup.bottom() - 2, popup.width - 4, 1),
+                );
+            }
             if matches!(app.mode, Mode::Confirm(_)) && popup.width > 4 && popup.height >= 5 {
                 let (primary, cancel, gap) = dialog_buttons(popup.width, false);
                 frame.render_widget(
@@ -2789,6 +2800,24 @@ mod input_tests {
 
     fn key(app: &mut App, code: KeyCode) {
         assert!(app.key(KeyEvent::new(code, KeyModifiers::NONE)));
+    }
+
+    #[test]
+    fn information_dialog_keeps_focus_until_dismissed() {
+        let mut app = App::new().unwrap();
+        app.error("Information de test".into());
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let popup = popup_area(Rect::new(0, 0, 80, 24));
+        assert!(
+            terminal.backend().buffer()[(popup.x + 2, popup.bottom() - 2)]
+                .modifier
+                .contains(Modifier::REVERSED)
+        );
+        key(&mut app, KeyCode::Right);
+        assert!(matches!(app.mode, Mode::Message));
+        key(&mut app, KeyCode::Enter);
+        assert!(!matches!(app.mode, Mode::Message));
     }
 
     #[test]
