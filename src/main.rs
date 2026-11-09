@@ -2043,10 +2043,12 @@ mod input_tests {
                 if legacy {
                     let system_root = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
                     let legacy_dir = system_root.join("System32/WindowsPowerShell/v1.0");
+                    #[cfg(target_arch = "x86_64")]
+                    assert!(
+                        legacy_dir.join("powershell.exe").is_file(),
+                        "Windows PowerShell 5.1 missing"
+                    );
                     if !legacy_dir.join("powershell.exe").is_file() {
-                        #[cfg(target_arch = "x86_64")]
-                        panic!("Windows PowerShell 5.1 missing");
-                        #[cfg(not(target_arch = "x86_64"))]
                         continue;
                     }
                     child.env(
