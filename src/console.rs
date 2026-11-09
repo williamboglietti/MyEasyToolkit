@@ -221,6 +221,9 @@ fn run_inner(
     pause_on_error: bool,
 ) -> io::Result<Result<(), String>> {
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+    // This terminal shares the alternate screen with the explorer. Clear the
+    // old frame before Ratatui compares against its initially empty buffer.
+    terminal.clear()?;
     let mut dimensions = size()?;
     let pair = native_pty_system()
         .openpty(dimensions)

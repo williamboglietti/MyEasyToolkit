@@ -6,8 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[test]
-fn interactive_failure_stays_visible_until_return() {
+fn run_interactive_failure(batch: bool) {
     let directory = tempfile::tempdir().unwrap();
     let (filename, script) = if cfg!(windows) {
         ("test.ps1", "$answer = Read-Host 'REPONSE?'\n[Console]::Error.WriteLine(\"ERREUR: $answer\")\nexit 1\n")
@@ -40,11 +39,11 @@ fn interactive_failure_stays_visible_until_return() {
         }
     });
     let mut screen = vt100::Parser::new(30, 100, 1000);
-    let mut wait_for = |text: &str| {
+    let mut wait_for = |text: &str| -> String {
         let deadline = Instant::now() + Duration::from_secs(15);
         while Instant::now() < deadline {
             if screen.screen().contents().contains(text) {
-                return;
+                return screen.screen().contents();
             }
             if let Ok(bytes) = rx.recv_timeout(Duration::from_millis(100)) {
                 screen.process(&bytes);
@@ -56,10 +55,23 @@ fn interactive_failure_stays_visible_until_return() {
         );
     };
     wait_for(filename);
-    writer.write_all(b"\r\r").unwrap();
-    wait_for("Exécuter");
+    if batch {
+        writer.write_all(b"\r x").unwrap();
+        wait_for("Confirmer la sélection");
+    } else {
+        writer.write_all(b"\r\r").unwrap();
+        wait_for("Exécuter");
+    }
     writer.write_all(b"o").unwrap();
-    wait_for("REPONSE?");
+    let console = wait_for("REPONSE?");
+    assert!(
+        !console.contains("Confirmer la sélection"),
+        "La confirmation reste affichée : {console}"
+    );
+    assert!(
+        !console.contains("[Annuler]"),
+        "Les anciens boutons restent affichés : {console}"
+    );
     writer.write_all(b"bonjour\r").unwrap();
     wait_for("ERREUR: bonjour");
     wait_for("Échec (code 1)");
@@ -76,4 +88,14 @@ fn interactive_failure_stays_visible_until_return() {
     }
     let _ = child.kill();
     panic!("L'application ne s'est pas fermée");
+}
+
+#[test]
+fn single_script_has_a_clean_console() {
+    run_interactive_failure(false);
+}
+
+#[test]
+fn batch_script_has_a_clean_console() {
+    run_interactive_failure(true);
 }
