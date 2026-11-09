@@ -23,8 +23,8 @@ use repository::{
 };
 use std::{
     collections::HashMap,
-    io::{self, Write},
-    path::PathBuf,
+    io,
+    path::{Path, PathBuf},
     process::Command,
     sync::Arc,
     time::Duration,
@@ -877,26 +877,43 @@ impl App {
     }
 }
 
+fn script_command(interpreter: &Path, script_path: &Path, is_ps: bool, windows: bool) -> Command {
+    let mut command = Command::new(interpreter);
+    if is_ps {
+        command.arg("-NoProfile");
+        if windows {
+            // Scope the override to the PowerShell process that runs this script.
+            command.args(["-ExecutionPolicy", "Bypass"]);
+        }
+        command.arg("-File");
+    }
+    command.arg(script_path);
+    command
+}
+
 fn execute_script(entry: &Entry, data: &[u8]) -> Result<(), String> {
     let is_ps = description::leaf(entry)
         .to_ascii_lowercase()
         .ends_with(".ps1");
     let local_path = entry.url.to_file_path().ok();
-    let mut temporary = if local_path.is_none() {
-        let mut file = tempfile::Builder::new()
-            .suffix(if is_ps { ".ps1" } else { ".sh" })
-            .tempfile()
+    let temporary = if local_path.is_none() {
+        let dir = tempfile::Builder::new()
+            .prefix("myeasytoolkit-")
+            .tempdir()
             .map_err(|e| e.to_string())?;
-        file.write_all(data)
-            .and_then(|_| file.flush())
-            .map_err(|e| e.to_string())?;
-        Some(file)
+        let path = dir
+            .path()
+            .join(if is_ps { "script.ps1" } else { "script.sh" });
+        // Close the file before starting the interpreter: Windows may reject
+        // a second open while a NamedTempFile handle remains alive.
+        std::fs::write(&path, data).map_err(|e| e.to_string())?;
+        Some((dir, path))
     } else {
         None
     };
-    let script_path = match (&local_path, &mut temporary) {
+    let script_path = match (&local_path, &temporary) {
         (Some(path), _) => path.as_path(),
-        (_, Some(file)) => file.path(),
+        (_, Some((_, path))) => path.as_path(),
         _ => return Err("Chemin du script indisponible.".into()),
     };
     let interpreters = Interpreters::detect();
@@ -913,14 +930,7 @@ fn execute_script(entry: &Entry, data: &[u8]) -> Result<(), String> {
         }
         .to_string()
     })?;
-    let status = if is_ps {
-        Command::new(interpreter)
-            .args(["-NoProfile", "-File"])
-            .arg(script_path)
-            .status()
-    } else {
-        Command::new(interpreter).arg(script_path).status()
-    };
+    let status = script_command(&interpreter, script_path, is_ps, cfg!(windows)).status();
     match status {
         Ok(status) if status.success() => {
             println!("\nScript terminé : {status}");
@@ -1982,6 +1992,154 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod input_tests {
     use super::*;
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn script_command_scopes_windows_policy_to_the_powershell_child() {
+        let interpreter = Path::new("interpreter path");
+        let script = Path::new("script path/test.ps1");
+        let args = |is_ps, windows| {
+            script_command(interpreter, script, is_ps, windows)
+                .get_args()
+                .map(|arg| arg.to_os_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            args(true, true),
+            [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "script path/test.ps1"
+            ]
+        );
+        assert_eq!(
+            args(true, false),
+            ["-NoProfile", "-File", "script path/test.ps1"]
+        );
+        assert_eq!(args(false, true), ["script path/test.ps1"]);
+        assert_eq!(args(false, false), ["script path/test.ps1"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_executes_selected_scripts_under_a_restricted_parent_policy() {
+        const CHILD: &str = "MET_POLICY_TEST_CHILD";
+        const MARKER: &str = "MET_POLICY_TEST_MARKER";
+        if std::env::var_os(CHILD).is_none() {
+            let dir = tempfile::tempdir().unwrap();
+            for legacy in [false, true] {
+                let marker = dir.path().join("script result.txt");
+                let mut child = Command::new(std::env::current_exe().unwrap());
+                child
+                    .args([
+                        "--exact",
+                        "input_tests::powershell_executes_selected_scripts_under_a_restricted_parent_policy",
+                        "--nocapture",
+                    ])
+                    .env(CHILD, if legacy { "legacy" } else { "default" })
+                    .env(MARKER, &marker)
+                    .env("PSExecutionPolicyPreference", "Restricted");
+                if legacy {
+                    let system_root = PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+                    let legacy_dir = system_root.join("System32/WindowsPowerShell/v1.0");
+                    #[cfg(target_arch = "x86_64")]
+                    assert!(
+                        legacy_dir.join("powershell.exe").is_file(),
+                        "Windows PowerShell 5.1 missing"
+                    );
+                    if !legacy_dir.join("powershell.exe").is_file() {
+                        continue;
+                    }
+                    child.env(
+                        "PATH",
+                        std::env::join_paths([
+                            legacy_dir,
+                            system_root.join("System32"),
+                            system_root,
+                        ])
+                        .unwrap(),
+                    );
+                    // GitHub runs cargo under pwsh 7, whose module path can
+                    // otherwise be inherited by Windows PowerShell 5.1.
+                    child.env_remove("PSModulePath");
+                }
+                let result = child.output().unwrap();
+                assert!(
+                    result.status.success(),
+                    "child test failed (legacy={legacy}): {}\n{}",
+                    String::from_utf8_lossy(&result.stdout),
+                    String::from_utf8_lossy(&result.stderr)
+                );
+                std::fs::remove_file(marker).unwrap();
+            }
+            return;
+        }
+
+        let interpreter = Interpreters::detect()
+            .powershell
+            .expect("PowerShell required");
+        if std::env::var(CHILD).unwrap() == "legacy" {
+            assert_eq!(interpreter.file_name().unwrap(), "powershell.exe");
+        }
+        let parent_policy = || {
+            let result = Command::new(&interpreter)
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Get-ExecutionPolicy",
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "Get-ExecutionPolicy failed: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            String::from_utf8_lossy(&result.stdout).trim().to_owned()
+        };
+        assert_eq!(parent_policy(), "Restricted");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("script avec espaces.ps1");
+        let marker = PathBuf::from(std::env::var_os(MARKER).unwrap());
+        let script = b"Set-Content -LiteralPath $env:MET_POLICY_TEST_MARKER -Value ((Get-ExecutionPolicy).ToString() + '|' + $PSCommandPath)\n";
+        std::fs::write(&path, script).unwrap();
+        let baseline = Command::new(&interpreter)
+            .args(["-NoProfile", "-File"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(!baseline.status.success());
+        assert!(!marker.exists());
+
+        let local = Entry {
+            name: "script avec espaces.ps1".into(),
+            url: Url::from_file_path(&path).unwrap(),
+            directory: false,
+        };
+        execute_script(&local, b"").expect("local script should run");
+        let local_result = std::fs::read_to_string(&marker).unwrap();
+        let (policy, executed_path) = local_result.trim().split_once('|').unwrap();
+        assert_eq!(policy, "Bypass");
+        assert_eq!(
+            std::fs::canonicalize(executed_path).unwrap(),
+            std::fs::canonicalize(&path).unwrap()
+        );
+        std::fs::remove_file(&marker).unwrap();
+        let remote = Entry {
+            name: "script.ps1".into(),
+            url: Url::parse("https://example.test/script.ps1").unwrap(),
+            directory: false,
+        };
+        execute_script(&remote, script).expect("downloaded script should run");
+        let remote_result = std::fs::read_to_string(&marker).unwrap();
+        let (policy, executed_path) = remote_result.trim().split_once('|').unwrap();
+        assert_eq!(policy, "Bypass");
+        assert!(!Path::new(executed_path).exists());
+        assert!(execute_script(&remote, b"exit 42\n").is_err());
+        assert_eq!(parent_policy(), "Restricted");
+    }
 
     fn press(input: &mut Input, key: KeyCode) {
         input.key(KeyEvent::new(key, KeyModifiers::NONE));

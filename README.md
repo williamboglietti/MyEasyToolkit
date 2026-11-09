@@ -23,6 +23,8 @@ L’option « Arrêter si erreur » est activée par défaut ; cliquez dessus ou
 
 Les scripts `.sh` et `.ps1` ne sont exécutés qu’après confirmation, avec les droits de l’utilisateur courant. Les scripts locaux sont exécutés depuis leur emplacement d’origine ; les scripts distants sont téléchargés individuellement. Un script distant qui dépend d’autres fichiers du dépôt doit les récupérer lui-même. Les scripts `.sh` nécessitent Bash et les scripts `.ps1` nécessitent PowerShell.
 
+Sur Windows, les scripts `.ps1` confirmés sont lancés avec une politique d’exécution `Bypass` limitée au processus PowerShell du script. L’outil ne modifie pas la politique enregistrée pour l’utilisateur ou la machine ; une stratégie de groupe peut toutefois imposer une politique prioritaire.
+
 Pour les dépôts HTTP protégés, les identifiants Basic sont demandés lors d’une réponse 401, restent en mémoire pendant la session et ne sont envoyés qu’en HTTPS (sauf sur localhost pour les tests).
 
 ## Développement
