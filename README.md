@@ -23,6 +23,8 @@ L’option « Arrêter si erreur » est activée par défaut ; cliquez dessus ou
 
 Les scripts `.sh` et `.ps1` ne sont exécutés qu’après confirmation, avec les droits de l’utilisateur courant. Les scripts locaux sont exécutés depuis leur emplacement d’origine ; les scripts distants sont téléchargés individuellement. Un script distant qui dépend d’autres fichiers du dépôt doit les récupérer lui-même. Les scripts `.sh` nécessitent Bash et les scripts `.ps1` nécessitent PowerShell.
 
+La sortie du script s’affiche dans une console intégrée, qui accepte aussi les réponses au clavier. À la fin, consultez la sortie puis appuyez sur Entrée ou cliquez pour revenir ; utilisez la molette ou Page précédente / Page suivante pour parcourir l’historique. Pendant l’exécution, Maj + Page précédente / Page suivante permet de le parcourir sans transmettre ces touches au script. L’historique est limité à 10 000 lignes et reste uniquement en mémoire jusqu’au retour. Pour une série, la console reste affichée à la fin du dernier script et si une erreur interrompt la série ; lorsque l’arrêt sur erreur est désactivé, la sortie d’un script précédent est remplacée par celle du suivant.
+
 Sur Windows, les scripts `.ps1` confirmés sont lancés avec une politique d’exécution `Bypass` limitée au processus PowerShell du script. L’outil ne modifie pas la politique enregistrée pour l’utilisateur ou la machine ; une stratégie de groupe peut toutefois imposer une politique prioritaire.
 
 Pour les dépôts HTTP protégés, les identifiants Basic sont demandés lors d’une réponse 401, restent en mémoire pendant la session et ne sont envoyés qu’en HTTPS (sauf sur localhost pour les tests).

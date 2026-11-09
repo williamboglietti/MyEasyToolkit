@@ -1,3 +1,4 @@
+mod console;
 mod description;
 mod repository;
 
@@ -234,7 +235,7 @@ struct BatchRun {
     failures: Vec<String>,
     stop_on_error: bool,
 }
-type ScriptRunner<'a> = dyn FnMut(&Entry, &[u8], bool) -> Result<(), String> + 'a;
+type ScriptRunner<'a> = dyn FnMut(&Entry, &[u8], bool, bool) -> Result<(), String> + 'a;
 
 fn is_script(entry: &Entry) -> bool {
     !entry.directory
@@ -407,13 +408,19 @@ impl App {
                 Action::Run(entry) => {
                     self.mode = Mode::Browsing;
                     self.screen_needs_redraw = true;
-                    if let Err(e) = runner(&entry, &data, true) {
+                    if let Err(e) = runner(&entry, &data, true, true) {
                         self.error(e);
                     }
                 }
                 Action::RunBatch(entry) => {
                     self.screen_needs_redraw = true;
-                    let result = runner(&entry, &data, false);
+                    let wait = self
+                        .batch
+                        .as_ref()
+                        .is_some_and(|batch| batch.next + 1 == batch.entries.len());
+                    let stop_on_error =
+                        self.batch.as_ref().is_some_and(|batch| batch.stop_on_error);
+                    let result = runner(&entry, &data, wait, stop_on_error);
                     self.finish_batch_step(&entry, result);
                 }
             },
@@ -891,7 +898,10 @@ fn script_command(interpreter: &Path, script_path: &Path, is_ps: bool, windows: 
     command
 }
 
-fn execute_script(entry: &Entry, data: &[u8]) -> Result<(), String> {
+fn prepare_script(
+    entry: &Entry,
+    data: &[u8],
+) -> Result<(Command, Option<tempfile::TempDir>), String> {
     let is_ps = description::leaf(entry)
         .to_ascii_lowercase()
         .ends_with(".ps1");
@@ -904,18 +914,16 @@ fn execute_script(entry: &Entry, data: &[u8]) -> Result<(), String> {
         let path = dir
             .path()
             .join(if is_ps { "script.ps1" } else { "script.sh" });
-        // Close the file before starting the interpreter: Windows may reject
-        // a second open while a NamedTempFile handle remains alive.
+        // Close the file before launching PowerShell on Windows.
         std::fs::write(&path, data).map_err(|e| e.to_string())?;
         Some((dir, path))
     } else {
         None
     };
-    let script_path = match (&local_path, &temporary) {
-        (Some(path), _) => path.as_path(),
-        (_, Some((_, path))) => path.as_path(),
-        _ => return Err("Chemin du script indisponible.".into()),
-    };
+    let path = local_path
+        .as_deref()
+        .or_else(|| temporary.as_ref().map(|(_, path)| path.as_path()))
+        .ok_or_else(|| "Chemin du script indisponible.".to_owned())?;
     let interpreters = Interpreters::detect();
     let interpreter = if is_ps {
         interpreters.powershell
@@ -928,64 +936,36 @@ fn execute_script(entry: &Entry, data: &[u8]) -> Result<(), String> {
         } else {
             "Bash est introuvable."
         }
-        .to_string()
+        .to_owned()
     })?;
-    let status = script_command(&interpreter, script_path, is_ps, cfg!(windows)).status();
-    match status {
-        Ok(status) if status.success() => {
-            println!("\nScript terminé : {status}");
-            Ok(())
-        }
-        Ok(status) => {
-            println!("\nScript terminé : {status}");
-            Err(format!("code de sortie : {status}"))
-        }
-        Err(e) => {
-            println!("\nImpossible de démarrer le script : {e}");
-            Err(format!("Impossible de démarrer le script : {e}"))
-        }
+    let command = script_command(&interpreter, path, is_ps, cfg!(windows));
+    Ok((command, temporary.map(|(dir, _)| dir)))
+}
+
+#[cfg(test)]
+fn execute_script(entry: &Entry, data: &[u8]) -> Result<(), String> {
+    let (mut command, _temporary) = prepare_script(entry, data)?;
+    let status = command.status().map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("code de sortie : {status}"))
     }
 }
 
-fn run_script(entry: &Entry, data: &[u8], wait_for_user: bool) -> Result<(), String> {
-    disable_raw_mode().map_err(|e| e.to_string())?;
-    execute!(
-        io::stdout(),
-        LeaveAlternateScreen,
-        DisableMouseCapture,
-        DisableBracketedPaste
+fn run_script(
+    entry: &Entry,
+    data: &[u8],
+    wait_for_user: bool,
+    pause_on_error: bool,
+) -> Result<(), String> {
+    let (command, _temporary) = prepare_script(entry, data)?;
+    console::run(
+        &location_label(&entry.url),
+        &command,
+        wait_for_user,
+        pause_on_error,
     )
-    .map_err(|e| e.to_string())?;
-    println!("Exécution de {}\n", location_label(&entry.url));
-    let result = execute_script(entry, data);
-    if wait_for_user {
-        println!("Cliquez ou appuyez sur Entrée pour revenir au dépôt.");
-        enable_raw_mode().map_err(|e| e.to_string())?;
-        execute!(io::stdout(), EnableMouseCapture).map_err(|e| e.to_string())?;
-        loop {
-            match event::read().map_err(|e| e.to_string())? {
-                Event::Key(key)
-                    if key.code == KeyCode::Enter
-                        || (key.modifiers.contains(KeyModifiers::CONTROL)
-                            && key.code == KeyCode::Char('c')) =>
-                {
-                    break
-                }
-                Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Down(_)) => break,
-                _ => {}
-            }
-        }
-    } else {
-        enable_raw_mode().map_err(|e| e.to_string())?;
-    }
-    execute!(
-        io::stdout(),
-        EnterAlternateScreen,
-        EnableMouseCapture,
-        EnableBracketedPaste
-    )
-    .map_err(|e| e.to_string())?;
-    result
 }
 
 struct UiAreas {
@@ -2311,7 +2291,7 @@ mod input_tests {
             } else {
                 Action::Run(entry)
             };
-            app.action_with_runner(action, &mut |_, _, _| {
+            app.action_with_runner(action, &mut |_, _, _, _| {
                 if failed {
                     Err("échec".into())
                 } else {
@@ -2622,7 +2602,7 @@ mod input_tests {
             app.stop_on_error = stop;
             app.start_batch();
             while app.batch.is_some() {
-                app.advance_batch_with(&mut |entry, data, _| execute_script(entry, data));
+                app.advance_batch_with(&mut |entry, data, _, _| execute_script(entry, data));
             }
             assert_eq!(std::fs::read_to_string(&log).unwrap(), expected);
             assert!(app.message.contains("1 échec(s)"));
@@ -2632,7 +2612,7 @@ mod input_tests {
         let mut app = App::new().unwrap();
         app.selected_scripts = entries;
         app.start_batch();
-        app.advance_batch_with(&mut |entry, data, _| execute_script(entry, data));
+        app.advance_batch_with(&mut |entry, data, _, _| execute_script(entry, data));
         assert!(app.batch.is_none());
         assert!(app.message.contains("2 script(s) non lancé(s)"));
     }
@@ -2676,16 +2656,16 @@ mod input_tests {
         let mut app = App::new().unwrap();
         app.selected_scripts.push(entry.clone());
         app.start_batch();
-        app.advance_batch_with(&mut |_, _, _| panic!("must not execute before authentication"));
+        app.advance_batch_with(&mut |_, _, _, _| panic!("must not execute before authentication"));
         assert!(matches!(app.mode, Mode::Username(Action::RunBatch(_))));
         assert_eq!(app.batch.as_ref().unwrap().next, 0);
         app.repo
             .authenticate(url.join("./").unwrap(), "user".into(), "pass".into());
         let mut called = false;
-        app.action_with_runner(Action::RunBatch(entry), &mut |_, data, wait| {
+        app.action_with_runner(Action::RunBatch(entry), &mut |_, data, wait, _| {
             called = true;
             assert_eq!(data, b"exit 0");
-            assert!(!wait);
+            assert!(wait);
             Ok(())
         });
         server.join().unwrap();
@@ -2753,7 +2733,7 @@ mod input_tests {
             app.start_batch();
             let mut runs = 0;
             while app.batch.is_some() {
-                app.advance_batch_with(&mut |_, _, _| {
+                app.advance_batch_with(&mut |_, _, _, _| {
                     runs += 1;
                     Ok(())
                 });

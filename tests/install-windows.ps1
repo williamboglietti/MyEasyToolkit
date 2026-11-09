@@ -68,10 +68,16 @@ if (Test-Path $release) {
     # Un faux import MSVCR doit être détecté, même sur un runner ayant déjà le runtime.
     $bytes = [IO.File]::ReadAllBytes((Resolve-Path $release))
     $text = [Text.Encoding]::ASCII.GetString($bytes)
+    # Le nom peut également apparaître dans des chaînes de code, avant la table
+    # d'importation. Remplacer toutes les occurrences de même longueur garantit
+    # que le nom référencé par la table PE fait partie de la fixture modifiée.
+    $fakeImport = [Text.Encoding]::ASCII.GetBytes('MSVCR120.dll')
     $offset = $text.IndexOf('KERNEL32.dll', [StringComparison]::OrdinalIgnoreCase)
     if ($offset -lt 0) { throw 'Import système KERNEL32.dll introuvable dans le binaire de test.' }
-    $fakeImport = [Text.Encoding]::ASCII.GetBytes('MSVCR120.dll')
-    [Array]::Copy($fakeImport, 0, $bytes, $offset, $fakeImport.Length)
+    while ($offset -ge 0) {
+        [Array]::Copy($fakeImport, 0, $bytes, $offset, $fakeImport.Length)
+        $offset = $text.IndexOf('KERNEL32.dll', $offset + $fakeImport.Length, [StringComparison]::OrdinalIgnoreCase)
+    }
     $fakePe = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName())
     try {
         [IO.File]::WriteAllBytes($fakePe, $bytes)
