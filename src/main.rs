@@ -178,6 +178,7 @@ enum Source {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
     Sources,
+    Location,
     Filter,
     Contents,
     Controls,
@@ -796,13 +797,38 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return false;
         }
+        if matches!(self.mode, Mode::Browsing) && self.focus == Focus::Location {
+            match key.code {
+                KeyCode::Tab | KeyCode::Down | KeyCode::Right => {
+                    self.focus = Focus::Filter;
+                    return true;
+                }
+                KeyCode::BackTab | KeyCode::Up | KeyCode::Left => {
+                    self.focus_sources();
+                    return true;
+                }
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    self.edit_location();
+                    return true;
+                }
+                _ => {}
+            }
+        }
         if matches!(self.mode, Mode::Browsing) && self.focus == Focus::Filter {
             match key.code {
-                KeyCode::Tab | KeyCode::Down => {
+                KeyCode::Tab | KeyCode::Down | KeyCode::Right => {
                     self.focus_contents();
                     return true;
                 }
-                KeyCode::BackTab | KeyCode::Up => {
+                KeyCode::BackTab | KeyCode::Left => {
+                    if self.active_source() == Source::Local {
+                        self.focus_sources();
+                    } else {
+                        self.focus = Focus::Location;
+                    }
+                    return true;
+                }
+                KeyCode::Up => {
                     self.focus_sources();
                     return true;
                 }
@@ -867,7 +893,11 @@ impl App {
                 KeyCode::Char('q') | KeyCode::Esc => return false,
                 KeyCode::Tab => {
                     if self.focus == Focus::Sources {
-                        self.focus = Focus::Filter;
+                        self.focus = if self.active_source() == Source::Local {
+                            Focus::Filter
+                        } else {
+                            Focus::Location
+                        };
                     } else {
                         self.focus = Focus::Controls;
                         self.control_focus = 0;
@@ -1375,7 +1405,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
         .as_ref()
         .is_some_and(|url| source_for(url) != Source::Local)
     {
-        " Emplacement · cliquer pour modifier "
+        " Emplacement · Entrée ou clic pour modifier "
     } else {
         " Emplacement actuel "
     };
@@ -1384,7 +1414,13 @@ fn draw(frame: &mut Frame, app: &mut App) {
             .title(title)
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(if editing { accent } else { Style::default() }),
+            .border_style(if editing {
+                accent
+            } else if matches!(app.mode, Mode::Browsing) && app.focus == Focus::Location {
+                focused(true)
+            } else {
+                Style::default()
+            }),
         areas.location,
     );
     if areas.location.width > 2 && areas.location.height > 2 {
@@ -1710,6 +1746,8 @@ fn draw(frame: &mut Frame, app: &mut App) {
         "←/→ : action · Entrée : valider · ↑ : fichiers"
     } else if app.focus == Focus::Filter {
         "Entrée : changer le filtre · ↓ : fichiers"
+    } else if app.focus == Focus::Location {
+        "Entrée : modifier l’adresse · ↓ : filtre"
     } else if app.focus == Focus::Sources {
         if areas.footer.width < 38 {
             "←/→ source · Entrée · ↓"
@@ -2827,6 +2865,28 @@ mod input_tests {
         key(&mut app, KeyCode::Char('o'));
         assert!(matches!(app.mode, Mode::Url));
         assert_eq!(app.input_source, Source::Github);
+        assert_eq!(app.input.text, expected);
+    }
+
+    #[test]
+    fn remote_location_can_be_edited_without_shortcuts() {
+        let mut app = App::new().unwrap();
+        let url = github_url("https://github.com/community-scripts/ProxmoxVE").unwrap();
+        let expected = location_label(&url);
+        app.current = Some(url);
+        app.mode = Mode::Browsing;
+        app.focus_sources();
+        key(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus, Focus::Location);
+        key(&mut app, KeyCode::Right);
+        assert_eq!(app.focus, Focus::Filter);
+        key(&mut app, KeyCode::Right);
+        assert_eq!(app.focus, Focus::Contents);
+        key(&mut app, KeyCode::BackTab);
+        key(&mut app, KeyCode::BackTab);
+        assert_eq!(app.focus, Focus::Location);
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Url));
         assert_eq!(app.input.text, expected);
     }
 
