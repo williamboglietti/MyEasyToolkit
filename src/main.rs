@@ -13,7 +13,7 @@ use crossterm::{
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
     Frame, Terminal,
@@ -178,7 +178,9 @@ enum Source {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
     Sources,
+    Filter,
     Contents,
+    Controls,
 }
 
 const SOURCES: [Source; 3] = [Source::Local, Source::Http, Source::Github];
@@ -320,6 +322,10 @@ struct App {
     input_source: Source,
     focus: Focus,
     source_cursor: Source,
+    control_focus: usize,
+    dialog_focus: usize,
+    auth_focus: usize,
+    icons: bool,
     message: String,
     selected_scripts: Vec<Entry>,
     stop_on_error: bool,
@@ -348,6 +354,11 @@ impl App {
             input_source: Source::Http,
             focus: Focus::Contents,
             source_cursor: Source::Local,
+            control_focus: 0,
+            dialog_focus: 0,
+            auth_focus: 0,
+            icons: std::env::var_os("MYEASYTOOLKIT_ASCII").is_none()
+                && std::env::var("TERM").as_deref() != Ok("dumb"),
             message: String::new(),
             selected_scripts: Vec::new(),
             stop_on_error: true,
@@ -426,9 +437,11 @@ impl App {
             },
             Err(FetchError::Unauthorized) => {
                 self.input.clear();
+                self.auth_focus = 0;
                 self.mode = Mode::Username(action);
             }
             Err(FetchError::Message(e)) if is_new_root && url.scheme() != "file" => {
+                self.auth_focus = 0;
                 if self.input.text.is_empty() {
                     self.input.insert(&location_label(url));
                 }
@@ -557,6 +570,7 @@ impl App {
     fn confirm_batch(&mut self) {
         if !self.selected_scripts.is_empty() {
             self.batch_scroll = 0;
+            self.dialog_focus = 0;
             self.mode = Mode::ConfirmBatch;
         } else {
             self.error("Sélectionnez au moins un script avec sa case ou la barre d’espace.".into());
@@ -635,6 +649,7 @@ impl App {
         }
     }
     fn select_source(&mut self, source: Source) {
+        self.auth_focus = 0;
         self.message.clear();
         self.input.clear();
         self.input_source = source;
@@ -666,6 +681,26 @@ impl App {
             self.mode = Mode::Url;
         }
     }
+    fn toggle_filter(&mut self) {
+        self.show_all = !self.show_all;
+        self.apply_filter();
+        self.load_descriptions();
+    }
+    fn edit_location(&mut self) {
+        let source = self.current.as_ref().map_or(Source::Http, source_for);
+        if source == Source::Local {
+            self.select_source(Source::Http);
+        } else {
+            let current = self
+                .current
+                .as_ref()
+                .map(location_label)
+                .unwrap_or_default();
+            self.select_source(source);
+            self.input.clear();
+            self.input.insert(&current);
+        }
+    }
     fn error(&mut self, message: String) {
         self.message = message;
         self.mode = Mode::Message;
@@ -680,6 +715,7 @@ impl App {
             if entry.directory {
                 self.action(Action::Open(entry.url));
             } else if is_script(&entry) {
+                self.dialog_focus = 0;
                 self.mode = Mode::Confirm(entry);
             } else {
                 self.error("Ce fichier n’est pas un script .sh ou .ps1.".into());
@@ -730,19 +766,119 @@ impl App {
             self.state.select(Some(next));
         }
     }
+    // Authentication inputs keep normal caret navigation while Tab moves to buttons.
+    fn auth_key(&mut self, key: KeyEvent) -> Option<bool> {
+        match key.code {
+            KeyCode::Esc => return Some(false),
+            KeyCode::Tab => self.auth_focus = (self.auth_focus + 1) % 3,
+            KeyCode::BackTab => self.auth_focus = (self.auth_focus + 2) % 3,
+            KeyCode::Down if self.auth_focus == 0 => self.auth_focus = 1,
+            KeyCode::Up if self.auth_focus != 0 => self.auth_focus = 0,
+            KeyCode::Left | KeyCode::Right if self.auth_focus != 0 => {
+                self.auth_focus = 3 - self.auth_focus
+            }
+            KeyCode::Enter => return Some(self.auth_focus != 2),
+            KeyCode::Char(' ') if self.auth_focus != 0 => return Some(self.auth_focus != 2),
+            _ if self.auth_focus == 0 => self.input.key(key),
+            _ => {}
+        }
+        None
+    }
     fn key(&mut self, key: KeyEvent) -> bool {
+        let key = if key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::SHIFT) {
+            KeyEvent {
+                code: KeyCode::BackTab,
+                ..key
+            }
+        } else {
+            key
+        };
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return false;
+        }
+        if matches!(self.mode, Mode::Browsing) && self.focus == Focus::Filter {
+            match key.code {
+                KeyCode::Tab | KeyCode::Down => {
+                    self.focus_contents();
+                    return true;
+                }
+                KeyCode::BackTab | KeyCode::Up => {
+                    self.focus_sources();
+                    return true;
+                }
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    self.toggle_filter();
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        if matches!(self.mode, Mode::Browsing) && self.focus == Focus::Controls {
+            match key.code {
+                KeyCode::Right | KeyCode::Down => {
+                    self.control_focus = (self.control_focus + 1) % 6;
+                    return true;
+                }
+                KeyCode::Left => {
+                    self.control_focus = (self.control_focus + 5) % 6;
+                    return true;
+                }
+                KeyCode::Up => {
+                    self.focus_contents();
+                    return true;
+                }
+                KeyCode::Tab if self.control_focus < 5 => {
+                    self.control_focus += 1;
+                    return true;
+                }
+                KeyCode::Tab => {
+                    self.focus_sources();
+                    return true;
+                }
+                KeyCode::BackTab if self.control_focus > 0 => {
+                    self.control_focus -= 1;
+                    return true;
+                }
+                KeyCode::BackTab => {
+                    self.focus_contents();
+                    return true;
+                }
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    match self.control_focus {
+                        0 => self.confirm_batch(),
+                        1 => self.selected_scripts.clear(),
+                        2 => self.stop_on_error = !self.stop_on_error,
+                        3 => self.parent(),
+                        4 => {
+                            if let Some(url) = self.current.clone() {
+                                self.action(Action::Open(url));
+                            }
+                        }
+                        _ => return false,
+                    }
+                    return true;
+                }
+                _ => {}
+            }
         }
         let mode = std::mem::replace(&mut self.mode, Mode::Browsing);
         match mode {
             Mode::Browsing => match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => return false,
-                KeyCode::Tab | KeyCode::BackTab => {
+                KeyCode::Tab => {
                     if self.focus == Focus::Sources {
-                        self.focus_contents();
+                        self.focus = Focus::Filter;
                     } else {
-                        self.focus_sources();
+                        self.focus = Focus::Controls;
+                        self.control_focus = 0;
+                    }
+                }
+                KeyCode::BackTab => {
+                    if self.focus == Focus::Sources {
+                        self.focus = Focus::Controls;
+                        self.control_focus = 5;
+                    } else {
+                        self.focus = Focus::Filter;
                     }
                 }
                 KeyCode::Left if self.focus == Focus::Sources => self.move_source(-1),
@@ -758,15 +894,21 @@ impl App {
                     self.focus_sources()
                 }
                 KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
+                KeyCode::Down
+                    if self
+                        .state
+                        .selected()
+                        .is_some_and(|i| i + 1 == self.entries.len()) =>
+                {
+                    self.focus = Focus::Controls;
+                    self.control_focus = 0;
+                }
                 KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
                 KeyCode::Enter | KeyCode::Right => self.select(),
                 KeyCode::Char(' ') => self.toggle_script(),
                 KeyCode::Char('x') => self.confirm_batch(),
-                KeyCode::Char('t') => {
-                    self.show_all = !self.show_all;
-                    self.apply_filter();
-                    self.load_descriptions();
-                }
+                KeyCode::Char('i') => self.icons = !self.icons,
+                KeyCode::Char('t') => self.toggle_filter(),
                 KeyCode::PageUp => {
                     self.description_scroll = self.description_scroll.saturating_sub(3)
                 }
@@ -781,13 +923,14 @@ impl App {
                         self.action(Action::Open(url));
                     }
                 }
-                KeyCode::Char('o' | '2') => self.select_source(Source::Http),
+                KeyCode::Char('o') => self.edit_location(),
+                KeyCode::Char('2') => self.select_source(Source::Http),
                 KeyCode::Char('1') => self.select_source(Source::Local),
                 KeyCode::Char('3') => self.select_source(Source::Github),
                 _ => {}
             },
-            Mode::Url => match key.code {
-                KeyCode::Enter => match if self.input_source == Source::Github {
+            Mode::Url => match self.auth_key(key) {
+                Some(true) => match if self.input_source == Source::Github {
                     github_url(&self.input.text)
                 } else {
                     normalize_url(&self.input.text)
@@ -798,10 +941,11 @@ impl App {
                     }
                     Err(e) => {
                         self.message = e;
+                        self.auth_focus = 0;
                         self.mode = Mode::Url;
                     }
                 },
-                KeyCode::Esc => {
+                Some(false) => {
                     if self.current.is_some() {
                         self.focus_sources();
                         self.mode = Mode::Browsing;
@@ -809,27 +953,22 @@ impl App {
                         return false;
                     }
                 }
-                _ => {
-                    self.input.key(key);
+                None => {
                     self.message.clear();
                     self.mode = Mode::Url;
                 }
             },
-            Mode::Username(action) => match key.code {
-                KeyCode::Enter => {
+            Mode::Username(action) => match self.auth_key(key) {
+                Some(true) => {
                     let username = self.input.take();
+                    self.auth_focus = 0;
                     self.mode = Mode::Password(action, username);
                 }
-                KeyCode::Esc => {
-                    self.cancel_auth();
-                }
-                _ => {
-                    self.input.key(key);
-                    self.mode = Mode::Username(action);
-                }
+                Some(false) => self.cancel_auth(),
+                None => self.mode = Mode::Username(action),
             },
-            Mode::Password(action, username) => match key.code {
-                KeyCode::Enter => {
+            Mode::Password(action, username) => match self.auth_key(key) {
+                Some(true) => {
                     let password = self.input.take();
                     let scope = match &action {
                         Action::Open(url) | Action::OpenRoot(url) => url.clone(),
@@ -841,31 +980,49 @@ impl App {
                     self.action(action);
                     self.load_descriptions();
                 }
-                KeyCode::Esc => {
-                    self.cancel_auth();
-                }
-                _ => {
-                    self.input.key(key);
-                    self.mode = Mode::Password(action, username);
-                }
+                Some(false) => self.cancel_auth(),
+                None => self.mode = Mode::Password(action, username),
             },
-            Mode::Confirm(entry) => {
-                if matches!(key.code, KeyCode::Char('o' | 'O' | 'y' | 'Y')) {
-                    self.action(Action::Run(entry));
+            Mode::Confirm(entry) => match key.code {
+                KeyCode::Esc => {}
+                KeyCode::Char('o' | 'O' | 'y' | 'Y') => self.action(Action::Run(entry)),
+                KeyCode::Enter | KeyCode::Char(' ') if self.dialog_focus == 0 => {
+                    self.action(Action::Run(entry))
                 }
-            }
+                KeyCode::Enter | KeyCode::Char(' ') => {}
+                KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::Tab
+                | KeyCode::BackTab => {
+                    self.dialog_focus = 1 - self.dialog_focus;
+                    self.mode = Mode::Confirm(entry);
+                }
+                _ => self.mode = Mode::Confirm(entry),
+            },
             Mode::ConfirmBatch => match key.code {
                 KeyCode::Char('o' | 'O' | 'y' | 'Y') => self.start_batch(),
-                KeyCode::Char('e') => {
+                KeyCode::Enter | KeyCode::Char(' ') if self.dialog_focus == 0 => self.start_batch(),
+                KeyCode::Enter | KeyCode::Char(' ') if self.dialog_focus == 1 => {}
+                KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('e') => {
                     self.stop_on_error = !self.stop_on_error;
                     self.mode = Mode::ConfirmBatch;
                 }
-                KeyCode::Down => {
+                KeyCode::Right | KeyCode::Tab => {
+                    self.dialog_focus = (self.dialog_focus + 1) % 3;
+                    self.mode = Mode::ConfirmBatch;
+                }
+                KeyCode::Left | KeyCode::BackTab => {
+                    self.dialog_focus = (self.dialog_focus + 2) % 3;
+                    self.mode = Mode::ConfirmBatch;
+                }
+                KeyCode::Down | KeyCode::PageDown => {
                     self.batch_scroll =
                         (self.batch_scroll + 1).min(self.selected_scripts.len().saturating_sub(1));
                     self.mode = Mode::ConfirmBatch;
                 }
-                KeyCode::Up => {
+                KeyCode::Up | KeyCode::PageUp => {
                     self.batch_scroll = self.batch_scroll.saturating_sub(1);
                     self.mode = Mode::ConfirmBatch;
                 }
@@ -1111,6 +1268,20 @@ fn batch_popup_area(area: Rect) -> Rect {
         height,
     )
 }
+fn dialog_buttons(width: u16, authentication: bool) -> (&'static str, &'static str, &'static str) {
+    if width < 30 {
+        if authentication {
+            ("[OK]", "[Annul.]", " ")
+        } else {
+            ("[Oui]", "[Non]", " ")
+        }
+    } else if authentication {
+        ("[Continuer]", "[Annuler]", "   ")
+    } else {
+        ("[Exécuter]", "[Annuler]", "   ")
+    }
+}
+
 fn contains(area: Rect, x: u16, y: u16) -> bool {
     x >= area.x && x < area.right() && y >= area.y && y < area.bottom()
 }
@@ -1143,6 +1314,13 @@ fn source_layout(area: Rect) -> (&'static str, [&'static str; 3], &'static str, 
 fn draw(frame: &mut Frame, app: &mut App) {
     let areas = UiAreas::new(frame.area());
     let accent = Style::default().add_modifier(Modifier::BOLD);
+    let focused = |selected: bool| {
+        if selected {
+            accent.add_modifier(Modifier::REVERSED)
+        } else {
+            accent
+        }
+    };
     let heading = " MyEasyToolkit  /  vos scripts en un seul endroit";
     let mut header = vec![Span::styled(" MyEasyToolkit", accent)];
     if areas.header.width >= 50 {
@@ -1206,11 +1384,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
             .title(title)
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(if editing {
-                accent
-            } else {
-                Style::default().fg(Color::DarkGray)
-            }),
+            .border_style(if editing { accent } else { Style::default() }),
         areas.location,
     );
     if areas.location.width > 2 && areas.location.height > 2 {
@@ -1222,8 +1396,16 @@ fn draw(frame: &mut Frame, app: &mut App) {
         );
         if editing {
             let (text, caret) = app.input.visible(field.width as usize, false);
-            frame.render_widget(Paragraph::new(text), field);
-            frame.set_cursor_position((field.x + caret as u16, field.y));
+            let padding =
+                usize::from(field.width).saturating_sub(UnicodeWidthStr::width(text.as_str()));
+            frame.render_widget(
+                Paragraph::new(format!("{text}{}", " ".repeat(padding)))
+                    .style(Style::default().add_modifier(Modifier::UNDERLINED)),
+                field,
+            );
+            if app.auth_focus == 0 {
+                frame.set_cursor_position((field.x + caret as u16, field.y));
+            }
         } else {
             let text = app
                 .current
@@ -1240,17 +1422,21 @@ fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         " [t Filtre]  Compatibles"
     };
-    frame.render_widget(Paragraph::new(filter), areas.filter);
+    frame.render_widget(
+        Paragraph::new(filter).style(focused(app.focus == Focus::Filter)),
+        areas.filter,
+    );
     let items: Vec<ListItem> = app
         .entries
         .iter()
         .map(|entry| {
-            let kind = if entry.directory {
-                "[D] "
-            } else if is_script(entry) {
-                "[S] "
-            } else {
-                "[F] "
+            let kind = match (app.icons, entry.directory, is_script(entry)) {
+                (true, true, _) => "📁  ",
+                (true, false, true) => "📜  ",
+                (true, false, false) => "📄  ",
+                (false, true, _) => "[D] ",
+                (false, false, true) => "[S] ",
+                _ => "[F] ",
             };
             let selection = if is_script(entry) {
                 app.selected_scripts
@@ -1284,7 +1470,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
                                     summary,
                                     usize::from(areas.list.width).saturating_sub(column + 3),
                                 ),
-                                Style::default().fg(Color::Gray),
+                                Style::default(),
                             ));
                         }
                     }
@@ -1297,8 +1483,10 @@ fn draw(frame: &mut Frame, app: &mut App) {
         format!(" Contenu · {} ", app.entries.len())
     } else {
         format!(
-            " Contenu · {} élément(s) · [D] dossier · [S] script ",
-            app.entries.len()
+            " Contenu · {} élément(s) · {} dossier · {} script ",
+            app.entries.len(),
+            if app.icons { "📁" } else { "[D]" },
+            if app.icons { "📜" } else { "[S]" }
         )
     };
     let list = List::new(items)
@@ -1307,13 +1495,14 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 .title(list_title)
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::DarkGray)),
+                .border_style(if app.focus == Focus::Contents {
+                    accent
+                } else {
+                    Style::default()
+                }),
         )
         .highlight_style(if app.focus == Focus::Contents {
-            Style::default()
-                .bg(Color::Black)
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD)
+            Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
         } else {
             Style::default()
         })
@@ -1333,7 +1522,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
             .title(description_title)
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::DarkGray)),
+            .border_style(Style::default()),
         areas.description,
     );
     if areas.description.width > 2 && areas.description.height > 2 {
@@ -1365,7 +1554,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 .title(format!(" Sélection · {} ", app.selected_scripts.len()))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::DarkGray)),
+                .border_style(Style::default()),
             panel,
         );
         if panel.width > 4 && panel.height > 3 {
@@ -1446,50 +1635,79 @@ fn draw(frame: &mut Frame, app: &mut App) {
             Rect::new(areas.list.x + 1, areas.list.y + 1, areas.list.width - 2, 1),
         );
     }
-    let batch_actions = if areas.batch_bar.width < 38 {
-        format!(
-            " [Lancer] [Vider] {} script{}",
-            app.selected_scripts.len(),
-            if app.selected_scripts.len() > 1 {
-                "s"
-            } else {
-                ""
-            }
-        )
-    } else {
-        format!(
-            " [Lancer x] [Vider c]  {} script(s) en attente",
+    let compact = areas.batch_bar.width < 38;
+    let batch_line = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            if compact { "[Lancer]" } else { "[Lancer x]" },
+            focused(app.focus == Focus::Controls && app.control_focus == 0),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            if compact { "[Vider]" } else { "[Vider c]" },
+            focused(app.focus == Focus::Controls && app.control_focus == 1),
+        ),
+        Span::raw(format!(
+            "  {} script(s) en attente",
             app.selected_scripts.len()
-        )
-    };
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::styled(batch_actions, Style::default().add_modifier(Modifier::BOLD)),
-            Line::styled(
-                format!(
-                    " [{}] Arrêter si erreur (e)",
-                    if app.stop_on_error { "x" } else { " " }
-                ),
-                Style::default(),
+        )),
+    ]);
+    let stop_line = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            format!(
+                "[{}] Arrêter si erreur (e)",
+                if app.stop_on_error { "x" } else { " " }
             ),
-        ]),
-        areas.batch_bar,
-    );
-    let actions = if editing && areas.footer.width < 20 {
-        " [OK] [Annuler]"
-    } else if editing {
-        " [Ouvrir]  [Annuler]"
-    } else if areas.footer.width < 34 {
-        " [Retour] [Maj] [Quitter]"
+            focused(app.focus == Focus::Controls && app.control_focus == 2),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(vec![batch_line, stop_line]), areas.batch_bar);
+    let actions = if editing {
+        let compact = areas.footer.width < 20;
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                if compact { "[OK]" } else { "[Ouvrir]" },
+                focused(app.auth_focus == 1),
+            ),
+            Span::raw(if compact { " " } else { "  " }),
+            Span::styled("[Annuler]", focused(app.auth_focus == 2)),
+        ])
     } else {
-        " [Retour]  [Actualiser]  [Quitter]"
+        let compact = areas.footer.width < 34;
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "[Retour]",
+                focused(app.focus == Focus::Controls && app.control_focus == 3),
+            ),
+            Span::raw(if compact { " " } else { "  " }),
+            Span::styled(
+                if compact { "[Maj]" } else { "[Actualiser]" },
+                focused(app.focus == Focus::Controls && app.control_focus == 4),
+            ),
+            Span::raw(if compact { " " } else { "  " }),
+            Span::styled(
+                if areas.footer.width < 26 {
+                    "[Quit]"
+                } else {
+                    "[Quitter]"
+                },
+                focused(app.focus == Focus::Controls && app.control_focus == 5),
+            ),
+        ])
     };
     let hint = if editing {
         if app.message.is_empty() {
-            "Entrée : ouvrir  ·  Échap : annuler  ·  ←/→ : curseur"
+            "Entrée : ouvrir · Tab : boutons · ←/→ : curseur"
         } else {
             app.message.as_str()
         }
+    } else if app.focus == Focus::Controls {
+        "←/→ : action · Entrée : valider · ↑ : fichiers"
+    } else if app.focus == Focus::Filter {
+        "Entrée : changer le filtre · ↓ : fichiers"
     } else if app.focus == Focus::Sources {
         if areas.footer.width < 38 {
             "←/→ source · Entrée · ↓"
@@ -1501,11 +1719,11 @@ fn draw(frame: &mut Frame, app: &mut App) {
     } else if areas.footer.width < 72 {
         "↑ en haut : sources · Espace : choisir"
     } else {
-        "↑/↓ : fichiers · ↑ en haut : sources · Espace : choisir · Entrée : ouvrir"
+        "↑/↓ : fichiers · Espace : choisir · Entrée : ouvrir · i : icônes"
     };
     frame.render_widget(
         Paragraph::new(vec![
-            Line::styled(actions, Style::default().add_modifier(Modifier::BOLD)),
+            actions,
             Line::styled(
                 hint,
                 if editing && !app.message.is_empty() {
@@ -1562,12 +1780,18 @@ fn draw(frame: &mut Frame, app: &mut App) {
                     "[{}] Arrêter si erreur (e)",
                     if app.stop_on_error { "x" } else { " " }
                 ))
-                .style(Style::default().add_modifier(Modifier::BOLD)),
+                .style(focused(app.dialog_focus == 2)),
                 Rect::new(popup.x + 2, popup.bottom() - 4, width, 1),
             );
+            let (primary, cancel, _) = dialog_buttons(popup.width, false);
+            let gap = " ";
             frame.render_widget(
-                Paragraph::new("[Exécuter] [Annuler]  o / Échap · ↑/↓")
-                    .style(Style::default().add_modifier(Modifier::BOLD)),
+                Paragraph::new(Line::from(vec![
+                    Span::styled(primary, focused(app.dialog_focus == 0)),
+                    Span::raw(gap),
+                    Span::styled(cancel, focused(app.dialog_focus == 1)),
+                    Span::raw("  ←/→ choix · Entrée · ↑/↓ liste"),
+                ])),
                 Rect::new(popup.x + 2, popup.bottom() - 2, width, 1),
             );
         }
@@ -1590,11 +1814,25 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 Rect::new(x, y, inner_width, 1),
             );
             let (text, caret) = app.input.visible(inner_width as usize, secret);
-            frame.render_widget(Paragraph::new(text), Rect::new(x, y + 1, inner_width, 1));
-            frame.set_cursor_position((x + caret as u16, y + 1));
+            let padding =
+                usize::from(inner_width).saturating_sub(UnicodeWidthStr::width(text.as_str()));
+            frame.render_widget(
+                Paragraph::new(format!("{text}{}", " ".repeat(padding)))
+                    .style(Style::default().add_modifier(Modifier::UNDERLINED)),
+                Rect::new(x, y + 1, inner_width, 1),
+            );
+            if app.auth_focus == 0 {
+                frame.set_cursor_position((x + caret as u16, y + 1));
+            }
             if popup.height >= 6 {
+                let (primary, cancel, gap) = dialog_buttons(popup.width, true);
                 frame.render_widget(
-                    Paragraph::new("[Continuer]   [Annuler]").style(Style::default()),
+                    Paragraph::new(Line::from(vec![
+                        Span::styled(primary, focused(app.auth_focus == 1)),
+                        Span::raw(gap),
+                        Span::styled(cancel, focused(app.auth_focus == 2)),
+                        Span::raw("  Tab : choix"),
+                    ])),
                     Rect::new(x, y + 3, inner_width, 1),
                 );
             }
@@ -1621,9 +1859,14 @@ fn draw(frame: &mut Frame, app: &mut App) {
                 popup,
             );
             if matches!(app.mode, Mode::Confirm(_)) && popup.width > 4 && popup.height >= 5 {
+                let (primary, cancel, gap) = dialog_buttons(popup.width, false);
                 frame.render_widget(
-                    Paragraph::new("[Exécuter]   [Annuler]   o / Échap")
-                        .style(Style::default().add_modifier(Modifier::BOLD)),
+                    Paragraph::new(Line::from(vec![
+                        Span::styled(primary, focused(app.dialog_focus == 0)),
+                        Span::raw(gap),
+                        Span::styled(cancel, focused(app.dialog_focus == 1)),
+                        Span::raw("   ←/→ : choisir · Entrée"),
+                    ])),
                     Rect::new(popup.x + 2, popup.bottom() - 2, popup.width - 4, 1),
                 );
             }
@@ -1668,9 +1911,8 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
                 && x > areas.filter.x
                 && x < areas.filter.x.saturating_add(11).min(areas.filter.right())
             {
-                app.show_all = !app.show_all;
-                app.apply_filter();
-                app.load_descriptions();
+                app.focus = Focus::Filter;
+                app.toggle_filter();
             } else if matches!(app.mode, Mode::Browsing)
                 && y == areas.description.y
                 && areas.description.width >= 22
@@ -1720,6 +1962,7 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
                 if matches!(app.mode, Mode::Url) {
                     if areas.footer.width < 20 {
                         if (1..=4).contains(&col) {
+                            app.auth_focus = 1;
                             return app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
                         }
                         if (6..=14).contains(&col) {
@@ -1727,6 +1970,7 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
                         }
                     } else {
                         if (1..=8).contains(&col) {
+                            app.auth_focus = 1;
                             return app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
                         }
                         if (11..=19).contains(&col) {
@@ -1765,20 +2009,19 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
                 && x > areas.location.x
                 && x < areas.location.right() - 1
             {
+                app.auth_focus = 0;
                 app.input.click(
                     (areas.location.width - 2) as usize,
                     (x - areas.location.x - 1) as usize,
                     false,
                 );
             } else if matches!(app.mode, Mode::Browsing) && contains(areas.location, x, y) {
-                let source = app.current.as_ref().map_or(Source::Http, source_for);
-                if source != Source::Local {
-                    let current = app.current.as_ref().map(location_label).unwrap_or_default();
-                    app.select_source(source);
-                    if source == Source::Http {
-                        app.input.clear();
-                        app.input.insert(&current);
-                    }
+                if app
+                    .current
+                    .as_ref()
+                    .is_some_and(|url| source_for(url) != Source::Local)
+                {
+                    app.edit_location();
                 }
             } else if matches!(app.mode, Mode::Browsing)
                 && x > areas.list.x
@@ -1808,25 +2051,26 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
                     && x >= popup.x + 2
                     && x < popup.right() - 2
                 {
+                    app.auth_focus = 0;
                     app.input.click(
                         (popup.width - 4) as usize,
                         (x - popup.x - 2) as usize,
                         matches!(app.mode, Mode::Password(_, _)),
                     );
-                } else if popup.width > 4
-                    && popup.height >= 6
-                    && y == popup.y + 4
-                    && x >= popup.x + 2
-                    && x < (popup.x + 13).min(popup.right())
-                {
-                    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-                } else if popup.width > 4
-                    && popup.height >= 6
-                    && y == popup.y + 4
-                    && x >= popup.x + 16
-                    && x < (popup.x + 25).min(popup.right())
-                {
-                    return app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                } else if popup.width > 4 && popup.height >= 6 && y == popup.y + 4 {
+                    let (primary, cancel, gap) = dialog_buttons(popup.width, true);
+                    let start = popup.x + 2;
+                    let cancel_start = start
+                        + UnicodeWidthStr::width(primary) as u16
+                        + UnicodeWidthStr::width(gap) as u16;
+                    if x >= start && x < start + UnicodeWidthStr::width(primary) as u16 {
+                        app.auth_focus = 1;
+                        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                    } else if x >= cancel_start
+                        && x < cancel_start + UnicodeWidthStr::width(cancel) as u16
+                    {
+                        return app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                    }
                 }
             } else if matches!(app.mode, Mode::ConfirmBatch) {
                 let popup = batch_popup_area(area);
@@ -1838,18 +2082,33 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
                 {
                     app.stop_on_error = !app.stop_on_error;
                 } else if popup.width > 4 && popup.height >= 6 && y == popup.bottom() - 2 {
-                    if x >= popup.x + 2 && x < popup.x + 12 {
+                    let (primary, cancel, _) = dialog_buttons(popup.width, false);
+                    let gap = " ";
+                    let start = popup.x + 2;
+                    let cancel_start = start
+                        + UnicodeWidthStr::width(primary) as u16
+                        + UnicodeWidthStr::width(gap) as u16;
+                    if x >= start && x < start + UnicodeWidthStr::width(primary) as u16 {
                         app.start_batch();
-                    } else if x >= popup.x + 13 && x < popup.x + 22 {
+                    } else if x >= cancel_start
+                        && x < cancel_start + UnicodeWidthStr::width(cancel) as u16
+                    {
                         app.mode = Mode::Browsing;
                     }
                 }
             } else if matches!(app.mode, Mode::Confirm(_)) {
                 let popup = popup_area(area);
                 if popup.width > 4 && popup.height >= 5 && y == popup.bottom() - 2 {
-                    if x >= popup.x + 2 && x < popup.x + 12 {
+                    let (primary, cancel, gap) = dialog_buttons(popup.width, false);
+                    let start = popup.x + 2;
+                    let cancel_start = start
+                        + UnicodeWidthStr::width(primary) as u16
+                        + UnicodeWidthStr::width(gap) as u16;
+                    if x >= start && x < start + UnicodeWidthStr::width(primary) as u16 {
                         app.key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
-                    } else if x >= popup.x + 15 && x < popup.x + 24 {
+                    } else if x >= cancel_start
+                        && x < cancel_start + UnicodeWidthStr::width(cancel) as u16
+                    {
                         app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
                     }
                 }
@@ -1939,6 +2198,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Mode::Url | Mode::Username(_) | Mode::Password(_, _)
                     ) =>
                 {
+                    if app.auth_focus != 0 {
+                        continue;
+                    }
                     if matches!(app.mode, Mode::Url)
                         && (app.input.text == "https://" || app.input.text == "https://github.com/")
                         && text.trim_start().starts_with("http")
@@ -2263,6 +2525,8 @@ mod input_tests {
         key(&mut app, KeyCode::Up);
         assert_eq!(app.focus, Focus::Sources);
         key(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus, Focus::Filter);
+        key(&mut app, KeyCode::Tab);
         assert_eq!(app.focus, Focus::Contents);
     }
 
@@ -2484,6 +2748,216 @@ mod input_tests {
 
     fn key(app: &mut App, code: KeyCode) {
         assert!(app.key(KeyEvent::new(code, KeyModifiers::NONE)));
+    }
+
+    #[test]
+    fn confirmation_buttons_follow_keyboard_focus_and_cancel_safely() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.sh");
+        std::fs::write(&path, "exit 0").unwrap();
+        let mut app = App::new().unwrap();
+        app.interpreters.bash = Some(PathBuf::from("bash"));
+        app.action(Action::OpenRoot(
+            Url::from_directory_path(dir.path()).unwrap(),
+        ));
+        app.select();
+        assert!(matches!(app.mode, Mode::Confirm(_)));
+        assert_eq!(app.dialog_focus, 0);
+        key(&mut app, KeyCode::Right);
+        assert_eq!(app.dialog_focus, 1);
+        assert!(matches!(app.mode, Mode::Confirm(_)));
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Browsing));
+        assert!(app.batch.is_none());
+    }
+
+    #[test]
+    fn keyboard_can_reach_batch_actions_toggle_and_confirm() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("test.sh"), "exit 0").unwrap();
+        let mut app = App::new().unwrap();
+        app.interpreters.bash = Some(PathBuf::from("bash"));
+        app.action(Action::OpenRoot(
+            Url::from_directory_path(dir.path()).unwrap(),
+        ));
+        app.focus_sources();
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Char(' '));
+        key(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus, Focus::Controls);
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::ConfirmBatch));
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Browsing));
+        assert!(app.batch.is_none());
+        key(&mut app, KeyCode::Enter);
+        key(&mut app, KeyCode::Left);
+        assert_eq!(app.dialog_focus, 2);
+        key(&mut app, KeyCode::Char(' '));
+        assert!(!app.stop_on_error);
+        key(&mut app, KeyCode::Tab);
+        key(&mut app, KeyCode::Enter);
+        assert!(!app.batch.as_ref().unwrap().stop_on_error);
+    }
+
+    #[test]
+    fn filter_is_reachable_without_shortcuts() {
+        let mut app = App::new().unwrap();
+        app.mode = Mode::Browsing;
+        app.focus_sources();
+        key(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus, Focus::Filter);
+        key(&mut app, KeyCode::Enter);
+        assert!(app.show_all);
+        key(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus, Focus::Contents);
+    }
+
+    #[test]
+    fn editing_current_remote_location_preserves_its_address() {
+        let mut app = App::new().unwrap();
+        let url = github_url("https://github.com/community-scripts/ProxmoxVE").unwrap();
+        let expected = location_label(&url);
+        app.current = Some(url);
+        app.mode = Mode::Browsing;
+        key(&mut app, KeyCode::Char('o'));
+        assert!(matches!(app.mode, Mode::Url));
+        assert_eq!(app.input_source, Source::Github);
+        assert_eq!(app.input.text, expected);
+    }
+
+    #[test]
+    fn url_field_and_buttons_are_reachable_with_tab() {
+        let mut app = App::new().unwrap();
+        app.select_source(Source::Http);
+        app.input.insert("example.com/");
+        key(&mut app, KeyCode::Tab);
+        assert_eq!(app.auth_focus, 1);
+        key(&mut app, KeyCode::Tab);
+        assert_eq!(app.auth_focus, 2);
+        key(&mut app, KeyCode::Up);
+        assert_eq!(app.auth_focus, 0);
+        let before = app.input.cursor;
+        key(&mut app, KeyCode::Left);
+        assert!(app.input.cursor < before);
+    }
+
+    #[test]
+    fn connection_error_returns_focus_to_url_field() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 1024];
+            let _ = stream.read(&mut request).unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+        });
+        let mut app = App::new().unwrap();
+        app.select_source(Source::Http);
+        app.input.clear();
+        app.input.insert(&format!("http://{address}/missing/"));
+        key(&mut app, KeyCode::Tab);
+        assert_eq!(app.auth_focus, 1);
+        key(&mut app, KeyCode::Enter);
+        server.join().unwrap();
+        assert!(matches!(app.mode, Mode::Url));
+        assert_eq!(app.auth_focus, 0);
+        assert!(!app.message.is_empty());
+    }
+
+    #[test]
+    fn credentials_support_keyboard_buttons_without_revealing_password() {
+        let mut app = App::new().unwrap();
+        let action = Action::Open(Url::parse("https://example.com/private/").unwrap());
+        app.mode = Mode::Password(action, "user".into());
+        app.input.insert("secret-test");
+        key(&mut app, KeyCode::Tab);
+        assert_eq!(app.auth_focus, 1);
+        key(&mut app, KeyCode::Right);
+        assert_eq!(app.auth_focus, 2);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert!(!format!("{buffer:?}").contains("secret-test"));
+        let popup = popup_area(Rect::new(0, 0, 80, 24));
+        assert!(buffer[(popup.x + 16, popup.y + 4)]
+            .modifier
+            .contains(Modifier::REVERSED));
+        key(&mut app, KeyCode::Enter);
+        assert!(!matches!(app.mode, Mode::Password(_, _)));
+        assert!(app.input.text.is_empty());
+    }
+
+    #[test]
+    fn small_dialog_has_visible_and_clickable_buttons() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let mut app = App::new().unwrap();
+        app.mode = Mode::Confirm(Entry {
+            name: "test.sh".into(),
+            url: Url::parse("https://example.com/test.sh").unwrap(),
+            directory: false,
+        });
+        let area = Rect::new(0, 0, 24, 16);
+        let popup = popup_area(area);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert!(format!("{buffer:?}").contains("[Oui] [Non]"));
+        assert!(buffer[(popup.x + 2, popup.bottom() - 2)]
+            .modifier
+            .contains(Modifier::REVERSED));
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: popup.x + 8,
+            row: popup.bottom() - 2,
+            modifiers: KeyModifiers::NONE,
+        };
+        mouse(&mut app, click, area);
+        assert!(matches!(app.mode, Mode::Browsing));
+    }
+
+    #[test]
+    fn interface_inherits_terminal_colors_and_offers_icon_fallback() {
+        use ratatui::style::Color;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("folder")).unwrap();
+        std::fs::write(dir.path().join("test.sh"), "exit 0").unwrap();
+        let mut app = App::new().unwrap();
+        app.interpreters.bash = Some(PathBuf::from("bash"));
+        app.action(Action::OpenRoot(
+            Url::from_directory_path(dir.path()).unwrap(),
+        ));
+        app.icons = true;
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        assert!(format!("{:?}", terminal.backend().buffer()).contains("📁"));
+        for cell in &terminal.backend().buffer().content {
+            assert_eq!(cell.fg, Color::Reset);
+            assert_eq!(cell.bg, Color::Reset);
+        }
+        key(&mut app, KeyCode::Char('i'));
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        assert!(format!("{:?}", terminal.backend().buffer()).contains("[D]"));
+        app.mode = Mode::Username(Action::Open(Url::parse("https://example.com/").unwrap()));
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        for cell in &terminal.backend().buffer().content {
+            assert_eq!(cell.fg, Color::Reset);
+            assert_eq!(cell.bg, Color::Reset);
+        }
+        let popup = popup_area(Rect::new(0, 0, 80, 24));
+        assert!(terminal.backend().buffer()[(popup.x + 2, popup.y + 2)]
+            .modifier
+            .contains(Modifier::UNDERLINED));
     }
 
     #[test]

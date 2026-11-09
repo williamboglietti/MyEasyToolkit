@@ -304,11 +304,8 @@ fn run_inner(
                     ])
                     .split(area);
                 frame.render_widget(
-                    Paragraph::new(format!(" MyEasyToolkit  /  Exécution  /  {name}")).style(
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ),
+                    Paragraph::new(format!(" MyEasyToolkit  /  Exécution  /  {name}"))
+                        .style(Style::default().add_modifier(Modifier::BOLD)),
                     parts[0],
                 );
                 let block = Block::default().title(" Console ").borders(Borders::ALL);
@@ -337,13 +334,13 @@ fn run_inner(
                         .into()
                 };
                 frame.render_widget(
-                    Paragraph::new(status).style(Style::default().fg(
+                    Paragraph::new(status).style(
                         if completed.as_ref().is_some_and(|s| !s.success()) {
-                            Color::Red
+                            Style::default().add_modifier(Modifier::BOLD)
                         } else {
-                            Color::Gray
+                            Style::default()
                         },
-                    )),
+                    ),
                     parts[2],
                 );
             })?;
