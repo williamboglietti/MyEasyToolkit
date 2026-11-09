@@ -11,9 +11,10 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-22.04
+    environment: prod
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_run' && vars.DISTRIBUTION_AUTO_PUBLISH == 'true' && github.event.workflow_run.event == 'push' &&
+      (github.event_name == 'workflow_run' && vars.MYEASYTOOLKIT_DISTRIBUTION_DEPLOY_ENABLED == 'true' && github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success')
     outputs:
       revision: ${{ steps.revision.outputs.revision }}
@@ -97,6 +98,7 @@ jobs:
   publish:
     needs: [validate, build]
     runs-on: ubuntu-22.04
+    environment: prod
     permissions:
       contents: write
     steps:
