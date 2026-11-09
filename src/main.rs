@@ -23,7 +23,7 @@ use repository::{
 };
 use std::{
     collections::HashMap,
-    io::{self, Write},
+    io,
     path::{Path, PathBuf},
     process::Command,
     sync::Arc,
@@ -896,21 +896,24 @@ fn execute_script(entry: &Entry, data: &[u8]) -> Result<(), String> {
         .to_ascii_lowercase()
         .ends_with(".ps1");
     let local_path = entry.url.to_file_path().ok();
-    let mut temporary = if local_path.is_none() {
-        let mut file = tempfile::Builder::new()
-            .suffix(if is_ps { ".ps1" } else { ".sh" })
-            .tempfile()
+    let temporary = if local_path.is_none() {
+        let dir = tempfile::Builder::new()
+            .prefix("myeasytoolkit-")
+            .tempdir()
             .map_err(|e| e.to_string())?;
-        file.write_all(data)
-            .and_then(|_| file.flush())
-            .map_err(|e| e.to_string())?;
-        Some(file)
+        let path = dir
+            .path()
+            .join(if is_ps { "script.ps1" } else { "script.sh" });
+        // Close the file before starting the interpreter: Windows may reject
+        // a second open while a NamedTempFile handle remains alive.
+        std::fs::write(&path, data).map_err(|e| e.to_string())?;
+        Some((dir, path))
     } else {
         None
     };
-    let script_path = match (&local_path, &mut temporary) {
+    let script_path = match (&local_path, &temporary) {
         (Some(path), _) => path.as_path(),
-        (_, Some(file)) => file.path(),
+        (_, Some((_, path))) => path.as_path(),
         _ => return Err("Chemin du script indisponible.".into()),
     };
     let interpreters = Interpreters::detect();
@@ -2066,8 +2069,7 @@ mod input_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("script avec espaces.ps1");
         let marker = PathBuf::from(std::env::var_os(MARKER).unwrap());
-        let script =
-            b"Set-Content -LiteralPath $env:MET_POLICY_TEST_MARKER -Value (Get-ExecutionPolicy)\n";
+        let script = b"Set-Content -LiteralPath $env:MET_POLICY_TEST_MARKER -Value ((Get-ExecutionPolicy).ToString() + '|' + $PSCommandPath)\n";
         std::fs::write(&path, script).unwrap();
         let baseline = Command::new(&interpreter)
             .args(["-NoProfile", "-File"])
@@ -2083,7 +2085,10 @@ mod input_tests {
             directory: false,
         };
         execute_script(&local, b"").expect("local script should run");
-        assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), "Bypass");
+        let local_result = std::fs::read_to_string(&marker).unwrap();
+        let (policy, executed_path) = local_result.trim().split_once('|').unwrap();
+        assert_eq!(policy, "Bypass");
+        assert_eq!(Path::new(executed_path), path);
         std::fs::remove_file(&marker).unwrap();
         let remote = Entry {
             name: "script.ps1".into(),
@@ -2091,7 +2096,10 @@ mod input_tests {
             directory: false,
         };
         execute_script(&remote, script).expect("downloaded script should run");
-        assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), "Bypass");
+        let remote_result = std::fs::read_to_string(&marker).unwrap();
+        let (policy, executed_path) = remote_result.trim().split_once('|').unwrap();
+        assert_eq!(policy, "Bypass");
+        assert!(!Path::new(executed_path).exists());
         assert!(execute_script(&remote, b"exit 42\n").is_err());
         assert_eq!(parent_policy(), "Restricted");
     }
