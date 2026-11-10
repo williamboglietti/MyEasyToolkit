@@ -6,6 +6,10 @@ Le vérificateur contrôle la signature OpenPGP détachée d'un manifeste JSON b
 
 Les tests utilisent exclusivement des clés jetables dont seules les parties publiques et les signatures sont conservées. Ils testent des manifestes pour macOS et Windows, ainsi que les erreurs de signature, de signataire, de plateforme, de contenu, de taille, de nom, d'expiration du manifeste et d'expiration de certificat.
 
+Une seconde expérience simule une politique de retour arrière à partir d'un catalogue signé référençant plusieurs versions. Le catalogue est distinct du manifeste initial : son numéro augmente même lorsque l'éditeur recommande une version antérieure. Un catalogue plus ancien, ou différent sous un numéro déjà accepté, est refusé. Un retour choisi par l'utilisateur et un retour recommandé par l'éditeur nécessitent tous deux une confirmation. Après simulation d'installation réussie, la version est maintenue jusqu'à une reprise explicite des mises à jour ; un nouveau correctif est signalé sans être installé automatiquement. Une installation échouée ne change pas l'état simulé.
+
+Les tests simulent également un redémarrage par sérialisation de l'état, mais cette persistance n'est pas intégrée à l'application : aucune opération d'installation ni aucun état utilisateur durable n'est créé par cette expérience.
+
 ```bash
 cargo test --locked --manifest-path experiments/verification-mises-a-jour/Cargo.toml
 ```
@@ -20,7 +24,8 @@ cargo run --locked --manifest-path experiments/verification-mises-a-jour/Cargo.t
 ## Limites à résoudre avant intégration
 
 - Ce format de manifeste est expérimental ; aucun manifeste macOS ou Windows de ce type n'est encore publié ou signé par la CI. Il faut étudier TUF et le comparer avant de choisir un format de production.
-- L'expiration seule ne prévient pas le retour à une ancienne version encore valide : il faut mémoriser l'état vérifié et protéger contre le retour arrière et le gel des métadonnées.
+- La politique de retour arrière est une simulation ; elle n'est pas intégrée à un téléchargeur ou un installateur. Avant toute utilisation réelle, il faut persister l'état vérifié de façon atomique et fiable, tester les interruptions, la corruption, l'horloge système, la première installation et le gel des métadonnées, et vérifier que l'interface transmet effectivement la confirmation de l'utilisateur.
+- Le catalogue utilise actuellement une seule sous-clé de CI : si cette clé est compromise, elle peut signer des informations malveillantes, y compris un numéro trop élevé. Il faut concevoir la séparation des rôles, la récupération et la rotation avec une autorité distincte.
 - Le certificat incorporé est une copie fixe : une révocation ou une nouvelle sous-clé publiée ultérieurement ne peut pas être découverte automatiquement. Il faut concevoir et tester la rotation et la récupération avec une autorité distincte de la clé compromise.
 - Le modèle de téléchargement HTTPS, ses limites de taille, le téléchargement atomique et la protection contre la substitution entre vérification et installation restent à implémenter. Aucun téléchargement ou remplacement n'est prévu ici.
 - Le backend cryptographique Rust de Sequoia est activé en mode expérimental et accepte des opérations à temps variable. La vérification ici porte sur des données et clés publiques, mais le choix du backend, sa maintenance et sa compatibilité demandent une revue avant production.

@@ -12,6 +12,8 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::io::Read;
 
+pub mod rollback;
+
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
