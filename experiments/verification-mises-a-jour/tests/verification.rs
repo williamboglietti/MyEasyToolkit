@@ -19,20 +19,26 @@ fn check(manifest: &[u8], signature: &[u8], data: &[u8], platform: &str, signer:
 
 #[test]
 fn accepte_une_mise_a_jour_signee() {
-    assert!(check(
+    verify(
+        KEY,
+        SIGNER.trim(),
         include_bytes!("fixtures/valide.json"),
         include_bytes!("fixtures/valide.json.asc"),
         DATA,
         "windows-amd64",
-        SIGNER
-    ));
-    assert!(check(
+        1_800_000_000,
+    )
+    .expect("la mise à jour Windows de test doit être valide");
+    verify(
+        KEY,
+        SIGNER.trim(),
         include_bytes!("fixtures/valide-macos.json"),
         include_bytes!("fixtures/valide-macos.json.asc"),
         DATA,
         "darwin-arm64",
-        SIGNER
-    ));
+        1_800_000_000,
+    )
+    .expect("la mise à jour macOS de test doit être valide");
 }
 
 #[test]
