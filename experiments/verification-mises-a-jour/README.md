@@ -25,5 +25,5 @@ cargo run --locked --manifest-path experiments/verification-mises-a-jour/Cargo.t
 - Le modèle de téléchargement HTTPS, ses limites de taille, le téléchargement atomique et la protection contre la substitution entre vérification et installation restent à implémenter. Aucun téléchargement ou remplacement n'est prévu ici.
 - Le backend cryptographique Rust de Sequoia est activé en mode expérimental et accepte des opérations à temps variable. La vérification ici porte sur des données et clés publiques, mais le choix du backend, sa maintenance et sa compatibilité demandent une revue avant production.
 - Sequoia OpenPGP est distribué sous licence LGPL-2.0-or-later : examiner les obligations de distribution applicables avant toute intégration dans l'exécutable distribué.
-- Un contrôle `cargo check` ciblant Windows ne remplace pas l'exécution des tests sur une machine Windows. La CI principale ne teste pas automatiquement cette expérience autonome.
+- La CI exécute également les tests de cette expérience sur les runners macOS et Windows. Vérifier leurs résultats avant toute décision d'intégration.
 - La première installation reste un problème distinct : un script obtenu du réseau ne peut pas établir lui-même sa propre authenticité sans point de confiance obtenu préalablement.
