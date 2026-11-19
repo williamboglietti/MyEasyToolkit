@@ -33,6 +33,9 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Test
         run: cargo test --locked
+      - name: Test experimental update verification
+        if: runner.os == 'macOS' || runner.os == 'Windows'
+        run: cargo test --locked --manifest-path experiments/verification-mises-a-jour/Cargo.toml
       - name: Build and run release binary
         if: runner.os != 'Linux'
         run: cargo run --release --locked -- --version
