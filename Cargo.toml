@@ -5,8 +5,8 @@ edition = "2021"
 description = "Browse and run scripts from HTTP repositories"
 
 [dependencies]
-crossterm = "0.28"
-ratatui = "0.29"
+crossterm = "0.29"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "underline-color", "layout-cache"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 scraper = "0.23"
 serde_json = "1"

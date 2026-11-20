@@ -5,7 +5,7 @@ use crossterm::event::{
 };
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use ratatui::{
-    backend::CrosstermBackend,
+    backend::{Backend, ClearType, CrosstermBackend},
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -21,6 +21,23 @@ use std::{
 };
 
 const HISTORY_LINES: usize = 10_000;
+
+// Ratatui 0.30 laisse chaque backend choisir son type d'erreur ; on le ramène à io::Error.
+pub(crate) fn backend_error<E: std::error::Error>(error: E) -> io::Error {
+    io::Error::other(error.to_string())
+}
+
+// Terminal::clear interroge la position du curseur depuis Ratatui 0.30 : sans réponse du
+// terminal (multiplexeur, SSH, émulateur de test) l'attente de 2 s échoue. On efface l'écran
+// et on vide le tampon précédent pour obtenir le même redessin complet.
+pub(crate) fn clear_screen<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
+    terminal
+        .backend_mut()
+        .clear_region(ClearType::All)
+        .map_err(backend_error)?;
+    terminal.swap_buffers();
+    Ok(())
+}
 
 fn key_bytes(key: KeyEvent, application_cursor: bool) -> Vec<u8> {
     if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -223,7 +240,7 @@ fn run_inner(
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     // This terminal shares the alternate screen with the explorer. Clear the
     // old frame before Ratatui compares against its initially empty buffer.
-    terminal.clear()?;
+    clear_screen(&mut terminal)?;
     let mut dimensions = size()?;
     let pair = native_pty_system()
         .openpty(dimensions)
@@ -353,7 +370,7 @@ fn run_inner(
                     pair.master.resize(new_size).map_err(io::Error::other)?;
                     parser.set_size(new_size.rows, new_size.cols);
                     dimensions = new_size;
-                    terminal.clear()?;
+                    clear_screen(&mut terminal)?;
                 }
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     if drained && matches!(key.code, KeyCode::Enter | KeyCode::Esc) {
