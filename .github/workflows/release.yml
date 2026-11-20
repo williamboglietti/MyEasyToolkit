@@ -11,9 +11,10 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-22.04
+    environment: prod
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_run' && vars.DISTRIBUTION_AUTO_PUBLISH == 'true' && github.event.workflow_run.event == 'push' &&
+      (github.event_name == 'workflow_run' && vars.PACKAGES_MYEASYTOOLKIT_COM_DEPLOY_ENABLED == 'true' && github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success')
     outputs:
       revision: ${{ steps.revision.outputs.revision }}
@@ -37,11 +38,11 @@ jobs:
           printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
       - name: Verify access to the site deployment workflow
         env:
-          GH_TOKEN: ${{ secrets.SITE_DEPLOY_TOKEN }}
+          GH_TOKEN: ${{ secrets.PACKAGES_MYEASYTOOLKIT_COM }}
         shell: bash
         run: |
           set -euo pipefail
-          [[ -n "$GH_TOKEN" ]] || { echo 'Secret SITE_DEPLOY_TOKEN absent.' >&2; exit 1; }
+          [[ -n "$GH_TOKEN" ]] || { echo 'Secret PACKAGES_MYEASYTOOLKIT_COM absent.' >&2; exit 1; }
           state="$(gh api repos/williamboglietti/MyEasyToolkit.com/actions/workflows/deploy.yml --jq '.state')"
           [[ "$state" == active ]] || { echo 'Workflow de déploiement du site indisponible.' >&2; exit 1; }
   build:
@@ -97,6 +98,7 @@ jobs:
   publish:
     needs: [validate, build]
     runs-on: ubuntu-22.04
+    environment: prod
     permissions:
       contents: write
     steps:
@@ -160,11 +162,11 @@ jobs:
           printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
       - name: Trigger site deployment
         env:
-          GH_TOKEN: ${{ secrets.SITE_DEPLOY_TOKEN }}
+          GH_TOKEN: ${{ secrets.PACKAGES_MYEASYTOOLKIT_COM }}
           RELEASE_TAG: ${{ steps.bundle.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
-          [[ -n "$GH_TOKEN" ]] || { echo 'Secret SITE_DEPLOY_TOKEN absent.' >&2; exit 1; }
+          [[ -n "$GH_TOKEN" ]] || { echo 'Secret PACKAGES_MYEASYTOOLKIT_COM absent.' >&2; exit 1; }
           jq -n --arg tag "$RELEASE_TAG" '{ref:"main",inputs:{release_tag:$tag}}' | \
             gh api --method POST repos/williamboglietti/MyEasyToolkit.com/actions/workflows/deploy.yml/dispatches --input -

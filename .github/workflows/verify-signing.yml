@@ -7,6 +7,7 @@ jobs:
   verify:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
+    environment: prod
     steps:
       - uses: actions/checkout@v4
       - name: Verify signing without publishing
@@ -17,10 +18,10 @@ jobs:
         run: bash tests/verify-signing-secret.sh
       - name: Verify access to site deployment workflow
         env:
-          GH_TOKEN: ${{ secrets.SITE_DEPLOY_TOKEN }}
+          GH_TOKEN: ${{ secrets.PACKAGES_MYEASYTOOLKIT_COM }}
         shell: bash
         run: |
           set -euo pipefail
-          [[ -n "$GH_TOKEN" ]] || { echo 'Secret SITE_DEPLOY_TOKEN absent.' >&2; exit 1; }
+          [[ -n "$GH_TOKEN" ]] || { echo 'Secret PACKAGES_MYEASYTOOLKIT_COM absent.' >&2; exit 1; }
           state="$(gh api repos/williamboglietti/MyEasyToolkit.com/actions/workflows/deploy.yml --jq '.state')"
           [[ "$state" == active ]] || { echo 'Workflow de déploiement du site indisponible.' >&2; exit 1; }
