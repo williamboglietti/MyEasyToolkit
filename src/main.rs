@@ -2177,11 +2177,13 @@ fn mouse(app: &mut App, mouse: crossterm::event::MouseEvent, area: Rect) -> bool
 // Reset Ratatui's previous frame as well, otherwise it only paints changed cells.
 fn draw_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<()> {
     if app.screen_needs_redraw {
-        terminal.clear()?;
+        console::clear_screen(terminal)?;
         app.screen_needs_redraw = false;
     }
     app.update_descriptions();
-    terminal.draw(|frame| draw(frame, app))?;
+    terminal
+        .draw(|frame| draw(frame, app))
+        .map_err(console::backend_error)?;
     Ok(())
 }
 
