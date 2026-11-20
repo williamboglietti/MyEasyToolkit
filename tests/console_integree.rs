@@ -56,13 +56,13 @@ fn run_interactive_failure(batch: bool) {
     };
     wait_for(filename);
     if batch {
-        writer.write_all(b"\r x").unwrap();
+        writer.write_all(b"\r \t\r").unwrap();
         wait_for("Confirmer la sélection");
     } else {
         writer.write_all(b"\r\r").unwrap();
         wait_for("Exécuter");
     }
-    writer.write_all(b"o").unwrap();
+    writer.write_all(b"\r").unwrap();
     let console = wait_for("REPONSE?");
     assert!(
         !console.contains("Confirmer la sélection"),
