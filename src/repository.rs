@@ -1,3 +1,4 @@
+use crate::enrollment::{self, Broker, IssueError};
 use reqwest::{blocking::Client, redirect::Policy, StatusCode};
 use scraper::{Html, Selector};
 use std::{io::Read, time::Duration};
@@ -295,6 +296,24 @@ impl Repository {
             self.fetch_with_accept(url, accept, LIMIT, Some(Duration::from_secs(5)))
         }
     }
+    pub fn start_mystorage_enrollment(&self, script: &Url) -> Result<Option<Broker>, String> {
+        if !enrollment::is_mystorage_bootstrap(script) {
+            return Ok(None);
+        }
+        let Some(credentials) = self.credentials_for(script).cloned() else {
+            return Ok(None);
+        };
+        let client = self.client.clone();
+        Broker::start(move || issue_enrollment(&client, &credentials, MYSTORAGE_ISSUER)).map(Some)
+    }
+
+    fn credentials_for(&self, url: &Url) -> Option<&Credentials> {
+        self.credentials
+            .iter()
+            .filter(|c| same_origin(&c.scope, url) && url.path().starts_with(c.scope.path()))
+            .max_by_key(|c| c.scope.path().len())
+    }
+
     fn fetch_with_accept(
         &self,
         url: &Url,
@@ -302,11 +321,7 @@ impl Repository {
         limit: u64,
         timeout: Option<Duration>,
     ) -> Result<Vec<u8>, FetchError> {
-        let auth = self
-            .credentials
-            .iter()
-            .filter(|c| same_origin(&c.scope, url) && url.path().starts_with(c.scope.path()))
-            .max_by_key(|c| c.scope.path().len());
+        let auth = self.credentials_for(url);
         if auth.is_some()
             && url.scheme() != "https"
             && !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
@@ -358,9 +373,144 @@ impl Repository {
     }
 }
 
+const MYSTORAGE_ISSUER: &str = "https://mystorage.ovh/api/machines/v1/issue-token.php";
+
+fn issue_enrollment(
+    client: &Client,
+    credentials: &Credentials,
+    endpoint: &str,
+) -> Result<String, IssueError> {
+    const LIMIT: u64 = 2048;
+    let response = client
+        .post(endpoint)
+        .timeout(Duration::from_secs(15))
+        .basic_auth(&credentials.username, Some(&credentials.password))
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .send()
+        .map_err(|_| IssueError::Unavailable)?;
+    match response.status() {
+        StatusCode::OK => {}
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => return Err(IssueError::Authentication),
+        _ => return Err(IssueError::Unavailable),
+    }
+
+    let mut body = Vec::new();
+    response
+        .take(LIMIT + 1)
+        .read_to_end(&mut body)
+        .map_err(|_| IssueError::Unavailable)?;
+    if body.len() as u64 > LIMIT {
+        return Err(IssueError::Unavailable);
+    }
+    let json: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|_| IssueError::Unavailable)?;
+    let token = json
+        .get("token")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(IssueError::Unavailable)?;
+    let suffix = token
+        .strip_prefix("met_enroll_")
+        .ok_or(IssueError::Unavailable)?;
+    (suffix.len() == 43
+        && suffix
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_')))
+    .then(|| token.to_owned())
+    .ok_or(IssueError::Unavailable)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automatic_enrollment_requires_credentials_for_the_bootstrap_subtree() {
+        let mut repo = Repository::new().unwrap();
+        let script =
+            Url::parse("https://mystorage.ovh/post-installation/windows/00-bootstrap.ps1").unwrap();
+        assert!(repo.start_mystorage_enrollment(&script).unwrap().is_none());
+        repo.authenticate(
+            Url::parse("https://mystorage.ovh/another-repo/").unwrap(),
+            "fixture".into(),
+            "test-only".into(),
+        );
+        assert!(repo.start_mystorage_enrollment(&script).unwrap().is_none());
+        repo.authenticate(
+            script.join("./").unwrap(),
+            "fixture".into(),
+            "test-only".into(),
+        );
+        assert!(repo.start_mystorage_enrollment(&script).unwrap().is_some());
+        assert!(repo
+            .start_mystorage_enrollment(&script.join("other.ps1").unwrap())
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn issuer_receives_a_bounded_post_using_the_existing_credentials() {
+        use std::{
+            io::{BufRead, BufReader, Write},
+            net::TcpListener,
+            thread,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!(
+            "http://{}/api/machines/v1/issue-token.php",
+            listener.local_addr().unwrap()
+        );
+        let token = "met_enroll_".to_owned() + &"x".repeat(43);
+        let expected = token.clone();
+        let fixture = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = String::new();
+            let mut reader = BufReader::new(&mut stream);
+            loop {
+                let mut line = String::new();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                if line == "\r\n" {
+                    break;
+                }
+                request.push_str(&line);
+            }
+            assert!(request.starts_with("POST /api/machines/v1/issue-token.php HTTP/1.1\r\n"));
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("content-type: application/json"));
+            assert!(request.lines().any(|line| {
+                line.split_once(':').is_some_and(|(name, value)| {
+                    name.eq_ignore_ascii_case("authorization")
+                        && value.trim() == "Basic dXNlcjpzZWNyZXQ="
+                })
+            }));
+            let mut body = [0; 2];
+            reader.read_exact(&mut body).unwrap();
+            assert_eq!(&body, b"{}");
+            let body = serde_json::json!({"token": token}).to_string();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+        let credentials = Credentials {
+            scope: Url::parse("https://mystorage.ovh/post-installation/").unwrap(),
+            username: "user".into(),
+            password: "secret".into(),
+        };
+        assert_eq!(
+            issue_enrollment(&Repository::new().unwrap().client, &credentials, &endpoint).ok(),
+            Some(expected)
+        );
+        fixture.join().unwrap();
+    }
     #[test]
     fn descriptions_respect_basic_auth_and_size_limit() {
         use std::{

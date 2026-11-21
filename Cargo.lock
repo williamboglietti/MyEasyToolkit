@@ -1138,9 +1138,10 @@ dependencies = [
 
 [[package]]
 name = "myeasytoolkit"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "crossterm",
+ "getrandom 0.4.3",
  "portable-pty",
  "ratatui",
  "reqwest",
