@@ -33,8 +33,6 @@ Sur Windows, les scripts `.ps1` confirmés sont lancés avec une politique d’e
 
 Pour les dépôts HTTP protégés, les identifiants Basic sont demandés lors d’une réponse 401, restent en mémoire pendant la session et ne sont envoyés qu’en HTTPS (sauf sur localhost pour les tests).
 
-Pour les bootstraps Windows et Linux de MyStorage, l’application réutilise cette session pour obtenir un jeton à usage unique au moment de l’enregistrement. Le jeton est remis au script via une connexion locale réservée à cette exécution.
-
 ## Développement
 
 ```bash
