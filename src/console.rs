@@ -231,7 +231,7 @@ pub fn run(
     run_inner(name, command, wait_for_user, pause_on_error).map_err(|e| format!("Console : {e}"))?
 }
 
-fn pty_command(command: &Command) -> CommandBuilder {
+pub(super) fn pty_command(command: &Command) -> CommandBuilder {
     let mut builder = CommandBuilder::new(command.get_program());
     builder.args(command.get_args());
     for (key, value) in command.get_envs() {

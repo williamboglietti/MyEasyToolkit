@@ -12,6 +12,11 @@ use url::Url;
 const PROOF_BYTES: usize = 64;
 const LOCAL_TIMEOUT: Duration = Duration::from_secs(1);
 
+pub(super) enum IssueError {
+    Authentication,
+    Unavailable,
+}
+
 pub(super) fn is_mystorage_bootstrap(url: &Url) -> bool {
     matches!(
         url.as_str(),
@@ -30,7 +35,7 @@ pub(super) struct Broker {
 
 impl Broker {
     pub(super) fn start(
-        issue: impl FnOnce() -> Option<String> + Send + 'static,
+        issue: impl FnOnce() -> Result<String, IssueError> + Send + 'static,
     ) -> Result<Self, String> {
         let mut random = [0_u8; 32];
         getrandom::fill(&mut random)
@@ -55,10 +60,14 @@ impl Broker {
                         if connection.set_nonblocking(false).is_ok()
                             && read_proof(&mut connection).as_ref() == Some(&expected)
                         {
-                            if let Some(token) = issue() {
-                                let _ = connection.set_write_timeout(Some(LOCAL_TIMEOUT));
-                                let _ = writeln!(connection, "{token}");
-                            }
+                            let response = issue();
+                            let message = match &response {
+                                Ok(token) => token,
+                                Err(IssueError::Authentication) => "AUTH",
+                                Err(IssueError::Unavailable) => "UNAVAILABLE",
+                            };
+                            let _ = connection.set_write_timeout(Some(LOCAL_TIMEOUT));
+                            let _ = writeln!(connection, "{message}");
                             return;
                         }
                     }
@@ -117,6 +126,7 @@ fn read_proof(connection: &mut TcpStream) -> Option<[u8; PROOF_BYTES + 1]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portable_pty::{native_pty_system, PtySize};
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -151,7 +161,7 @@ mod tests {
         let issued = token.clone();
         let broker = Broker::start(move || {
             observed.fetch_add(1, Ordering::SeqCst);
-            Some(issued)
+            Ok(issued)
         })
         .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -180,5 +190,57 @@ mod tests {
         let address = (Ipv4Addr::LOCALHOST, broker.port);
         drop(broker);
         assert!(TcpStream::connect(address).is_err());
+    }
+
+    #[test]
+    fn enrollment_proof_reaches_an_actual_terminal_child() {
+        let broker = Broker::start(|| Err(IssueError::Authentication)).unwrap();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact", "enrollment::tests::terminal_child_fixture"]);
+        command.env("MET_TEST_ENROLLMENT_CHILD", "1");
+        broker.configure(&mut command);
+
+        let terminal = native_pty_system().openpty(PtySize::default()).unwrap();
+        let mut child = terminal
+            .slave
+            .spawn_command(crate::console::pty_command(&command))
+            .unwrap();
+        drop(terminal.slave);
+        let mut output = terminal.master.try_clone_reader().unwrap();
+        let drain = thread::spawn(move || io::copy(&mut output, &mut io::sink()));
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success());
+                break;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                panic!("terminal enrollment fixture did not exit");
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        drop(terminal.master);
+        let _ = drain.join();
+    }
+
+    #[test]
+    fn terminal_child_fixture() {
+        if std::env::var_os("MET_TEST_ENROLLMENT_CHILD").is_none() {
+            return;
+        }
+        let port = std::env::var("MYSTORAGE_ENROLL_PORT")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let proof = std::env::var("MYSTORAGE_ENROLL_PROOF").unwrap();
+        let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        writeln!(stream, "{proof}").unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert_eq!(response, "AUTH\n");
     }
 }

@@ -1155,6 +1155,11 @@ fn run_script(
     pause_on_error: bool,
 ) -> Result<(), String> {
     let (mut command, _temporary) = prepare_script(entry, data)?;
+    command.env_remove("MYSTORAGE_ENROLL_PORT");
+    command.env_remove("MYSTORAGE_ENROLL_PROOF");
+    if !enrollment::is_mystorage_bootstrap(&entry.url) {
+        command.env_remove("MYSTORAGE_ENROLL_TOKEN");
+    }
     let broker =
         if std::env::var_os("MYSTORAGE_ENROLL_TOKEN").is_some_and(|token| !token.is_empty()) {
             None

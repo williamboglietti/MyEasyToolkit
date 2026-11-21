@@ -1,4 +1,4 @@
-use crate::enrollment::{self, Broker};
+use crate::enrollment::{self, Broker, IssueError};
 use reqwest::{blocking::Client, redirect::Policy, StatusCode};
 use scraper::{Html, Selector};
 use std::{io::Read, time::Duration};
@@ -375,7 +375,11 @@ impl Repository {
 
 const MYSTORAGE_ISSUER: &str = "https://mystorage.ovh/api/machines/v1/issue-token.php";
 
-fn issue_enrollment(client: &Client, credentials: &Credentials, endpoint: &str) -> Option<String> {
+fn issue_enrollment(
+    client: &Client,
+    credentials: &Credentials,
+    endpoint: &str,
+) -> Result<String, IssueError> {
     const LIMIT: u64 = 2048;
     let response = client
         .post(endpoint)
@@ -384,24 +388,36 @@ fn issue_enrollment(client: &Client, credentials: &Credentials, endpoint: &str) 
         .header("Content-Type", "application/json")
         .body("{}")
         .send()
-        .ok()?;
-    if response.status() != StatusCode::OK {
-        return None;
+        .map_err(|_| IssueError::Unavailable)?;
+    match response.status() {
+        StatusCode::OK => {}
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => return Err(IssueError::Authentication),
+        _ => return Err(IssueError::Unavailable),
     }
 
     let mut body = Vec::new();
-    response.take(LIMIT + 1).read_to_end(&mut body).ok()?;
+    response
+        .take(LIMIT + 1)
+        .read_to_end(&mut body)
+        .map_err(|_| IssueError::Unavailable)?;
     if body.len() as u64 > LIMIT {
-        return None;
+        return Err(IssueError::Unavailable);
     }
-    let json: serde_json::Value = serde_json::from_slice(&body).ok()?;
-    let token = json.get("token")?.as_str()?;
-    let suffix = token.strip_prefix("met_enroll_")?;
+    let json: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|_| IssueError::Unavailable)?;
+    let token = json
+        .get("token")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(IssueError::Unavailable)?;
+    let suffix = token
+        .strip_prefix("met_enroll_")
+        .ok_or(IssueError::Unavailable)?;
     (suffix.len() == 43
         && suffix
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_')))
     .then(|| token.to_owned())
+    .ok_or(IssueError::Unavailable)
 }
 
 #[cfg(test)]
@@ -490,7 +506,7 @@ mod tests {
             password: "secret".into(),
         };
         assert_eq!(
-            issue_enrollment(&Repository::new().unwrap().client, &credentials, &endpoint),
+            issue_enrollment(&Repository::new().unwrap().client, &credentials, &endpoint).ok(),
             Some(expected)
         );
         fixture.join().unwrap();
