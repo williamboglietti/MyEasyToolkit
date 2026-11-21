@@ -7,6 +7,26 @@ use std::{
 };
 
 fn run_interactive_failure(batch: bool) {
+    // Ces tests peuvent planter avec la pile par défaut sur Linux amd64/musl.
+    if cfg!(all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        target_env = "musl"
+    )) {
+        let result = thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || check_interactive_failure(batch))
+            .unwrap()
+            .join();
+        if let Err(panic) = result {
+            std::panic::resume_unwind(panic);
+        }
+        return;
+    }
+    check_interactive_failure(batch);
+}
+
+fn check_interactive_failure(batch: bool) {
     let directory = tempfile::tempdir().unwrap();
     let (filename, script) = if cfg!(windows) {
         ("test.ps1", "$answer = Read-Host 'REPONSE?'\n[Console]::Error.WriteLine(\"ERREUR: $answer\")\nexit 1\n")
