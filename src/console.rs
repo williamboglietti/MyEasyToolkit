@@ -231,6 +231,22 @@ pub fn run(
     run_inner(name, command, wait_for_user, pause_on_error).map_err(|e| format!("Console : {e}"))?
 }
 
+fn pty_command(command: &Command) -> CommandBuilder {
+    let mut builder = CommandBuilder::new(command.get_program());
+    builder.args(command.get_args());
+    for (key, value) in command.get_envs() {
+        if let Some(value) = value {
+            builder.env(key, value);
+        } else {
+            builder.env_remove(key);
+        }
+    }
+    if let Some(dir) = command.get_current_dir() {
+        builder.cwd(dir);
+    }
+    builder
+}
+
 fn run_inner(
     name: &str,
     command: &Command,
@@ -245,11 +261,7 @@ fn run_inner(
     let pair = native_pty_system()
         .openpty(dimensions)
         .map_err(io::Error::other)?;
-    let mut builder = CommandBuilder::new(command.get_program());
-    builder.args(command.get_args());
-    if let Some(dir) = command.get_current_dir() {
-        builder.cwd(dir);
-    }
+    let builder = pty_command(command);
     let mut child = pair
         .slave
         .spawn_command(builder)
@@ -457,6 +469,19 @@ fn run_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn terminal_child_receives_explicit_environment_overrides() {
+        let mut command = Command::new("fixture");
+        command.env("MYSTORAGE_ENROLL_PORT", "12345");
+        command.env("MYSTORAGE_ENROLL_PROOF", "fixture-proof");
+        let child = pty_command(&command);
+        assert_eq!(child.get_env("MYSTORAGE_ENROLL_PORT").unwrap(), "12345");
+        assert_eq!(
+            child.get_env("MYSTORAGE_ENROLL_PROOF").unwrap(),
+            "fixture-proof"
+        );
+    }
+
     #[test]
     fn input_encodes_navigation_control_and_unicode() {
         assert_eq!(
