@@ -5,7 +5,7 @@ use std::{
 };
 
 const KEY: &[u8] = include_bytes!("../../../packaging/myeasytoolkit-archive-keyring.gpg");
-const SIGNER: &str = "2EA0195379DBCEAA17B69B0D660BE4A46617BD54";
+const SIGNER: &str = "A0EF38D209213D2AB5761B814BBD7ACB126A6842";
 
 fn main() -> Result<()> {
     let args: Vec<_> = env::args().collect();

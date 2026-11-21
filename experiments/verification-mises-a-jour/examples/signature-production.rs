@@ -8,7 +8,7 @@ fn main() -> Result<()> {
         bail!("Usage : signature-production FICHIER SIGNATURE");
     }
     let key = include_bytes!("../../../packaging/myeasytoolkit-archive-keyring.gpg");
-    let signer = "2EA0195379DBCEAA17B69B0D660BE4A46617BD54";
+    let signer = "A0EF38D209213D2AB5761B814BBD7ACB126A6842";
     met_verification_experimentale::verify_signature(
         key,
         signer,

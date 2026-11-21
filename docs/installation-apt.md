@@ -4,10 +4,10 @@ Cette procédure concerne Debian et Ubuntu sur les architectures `amd64` et `arm
 
 Empreintes prévues pour la prochaine publication de production :
 
-- Clé principale : `A414D87A2177A956136013ABB0E0AB253511A2E4`.
-- Sous-clé stable : `2EA0195379DBCEAA17B69B0D660BE4A46617BD54`.
+- Clé principale : `3E484A3CC09A798022AEA0C01A91FD19F9E87AE7`.
+- Sous-clé stable : `A0EF38D209213D2AB5761B814BBD7ACB126A6842`.
 
-Ces nouvelles empreintes ne remplacent pas automatiquement la clé déjà installée. Une machine faisant confiance à l'ancienne clé de test peut nécessiter une réinstallation manuelle du trousseau après la publication.
+Ces empreintes s'appliquent à la rotation vers la nouvelle clé de production. Préparer la mise à jour du trousseau des clients avant la bascule du dépôt. Les machines qui font encore confiance à l'ancienne clé de production devront installer le nouveau trousseau par un canal de confiance.
 
 1. Installer les outils nécessaires et télécharger la clé publique dans un répertoire temporaire :
 
