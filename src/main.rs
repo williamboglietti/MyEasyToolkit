@@ -1,6 +1,5 @@
 mod console;
 mod description;
-mod enrollment;
 mod repository;
 
 use crossterm::{
@@ -239,8 +238,7 @@ struct BatchRun {
     failures: Vec<String>,
     stop_on_error: bool,
 }
-type ScriptRunner<'a> =
-    dyn FnMut(&Repository, &Entry, &[u8], bool, bool) -> Result<(), String> + 'a;
+type ScriptRunner<'a> = dyn FnMut(&Entry, &[u8], bool, bool) -> Result<(), String> + 'a;
 
 fn is_script(entry: &Entry) -> bool {
     !entry.directory
@@ -422,7 +420,7 @@ impl App {
                 Action::Run(entry) => {
                     self.mode = Mode::Browsing;
                     self.screen_needs_redraw = true;
-                    if let Err(e) = runner(&self.repo, &entry, &data, true, true) {
+                    if let Err(e) = runner(&entry, &data, true, true) {
                         self.error(e);
                     }
                 }
@@ -434,7 +432,7 @@ impl App {
                         .is_some_and(|batch| batch.next + 1 == batch.entries.len());
                     let stop_on_error =
                         self.batch.as_ref().is_some_and(|batch| batch.stop_on_error);
-                    let result = runner(&self.repo, &entry, &data, wait, stop_on_error);
+                    let result = runner(&entry, &data, wait, stop_on_error);
                     self.finish_batch_step(&entry, result);
                 }
             },
@@ -1101,10 +1099,15 @@ fn prepare_script(
         .ends_with(".ps1");
     let local_path = entry.url.to_file_path().ok();
     let temporary = if local_path.is_none() {
-        let dir = tempfile::Builder::new()
-            .prefix("myeasytoolkit-")
-            .tempdir()
-            .map_err(|e| e.to_string())?;
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("myeasytoolkit-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            builder.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        let dir = builder.tempdir().map_err(|e| e.to_string())?;
         let path = dir
             .path()
             .join(if is_ps { "script.ps1" } else { "script.sh" });
@@ -1148,27 +1151,12 @@ fn execute_script(entry: &Entry, data: &[u8]) -> Result<(), String> {
 }
 
 fn run_script(
-    repo: &Repository,
     entry: &Entry,
     data: &[u8],
     wait_for_user: bool,
     pause_on_error: bool,
 ) -> Result<(), String> {
-    let (mut command, _temporary) = prepare_script(entry, data)?;
-    command.env_remove("MYSTORAGE_ENROLL_PORT");
-    command.env_remove("MYSTORAGE_ENROLL_PROOF");
-    if !enrollment::is_mystorage_bootstrap(&entry.url) {
-        command.env_remove("MYSTORAGE_ENROLL_TOKEN");
-    }
-    let broker =
-        if std::env::var_os("MYSTORAGE_ENROLL_TOKEN").is_some_and(|token| !token.is_empty()) {
-            None
-        } else {
-            repo.start_mystorage_enrollment(&entry.url)?
-        };
-    if let Some(broker) = &broker {
-        broker.configure(&mut command);
-    }
+    let (command, _temporary) = prepare_script(entry, data)?;
     console::run(
         &location_label(&entry.url),
         &command,
@@ -2306,6 +2294,22 @@ mod input_tests {
     use super::*;
     use ratatui::backend::TestBackend;
 
+    #[cfg(unix)]
+    #[test]
+    fn downloaded_scripts_have_a_private_temporary_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let entry = Entry {
+            name: "script.sh".into(),
+            url: Url::parse("https://example.test/script.sh").unwrap(),
+            directory: false,
+        };
+        let (_, temporary) = prepare_script(&entry, b"exit 0\n").unwrap();
+        let directory = temporary.unwrap();
+        let permissions = directory.path().metadata().unwrap().permissions();
+        assert_eq!(permissions.mode() & 0o077, 0);
+    }
+
     #[test]
     fn script_command_scopes_windows_policy_to_the_powershell_child() {
         let interpreter = Path::new("interpreter path");
@@ -2626,7 +2630,7 @@ mod input_tests {
             } else {
                 Action::Run(entry)
             };
-            app.action_with_runner(action, &mut |_, _, _, _, _| {
+            app.action_with_runner(action, &mut |_, _, _, _| {
                 if failed {
                     Err("échec".into())
                 } else {
@@ -3187,7 +3191,7 @@ mod input_tests {
             app.stop_on_error = stop;
             app.start_batch();
             while app.batch.is_some() {
-                app.advance_batch_with(&mut |_, entry, data, _, _| execute_script(entry, data));
+                app.advance_batch_with(&mut |entry, data, _, _| execute_script(entry, data));
             }
             assert_eq!(std::fs::read_to_string(&log).unwrap(), expected);
             assert!(app.message.contains("1 échec(s)"));
@@ -3197,7 +3201,7 @@ mod input_tests {
         let mut app = App::new().unwrap();
         app.selected_scripts = entries;
         app.start_batch();
-        app.advance_batch_with(&mut |_, entry, data, _, _| execute_script(entry, data));
+        app.advance_batch_with(&mut |entry, data, _, _| execute_script(entry, data));
         assert!(app.batch.is_none());
         assert!(app.message.contains("2 script(s) non lancé(s)"));
     }
@@ -3241,15 +3245,13 @@ mod input_tests {
         let mut app = App::new().unwrap();
         app.selected_scripts.push(entry.clone());
         app.start_batch();
-        app.advance_batch_with(&mut |_, _, _, _, _| {
-            panic!("must not execute before authentication")
-        });
+        app.advance_batch_with(&mut |_, _, _, _| panic!("must not execute before authentication"));
         assert!(matches!(app.mode, Mode::Username(Action::RunBatch(_))));
         assert_eq!(app.batch.as_ref().unwrap().next, 0);
         app.repo
             .authenticate(url.join("./").unwrap(), "user".into(), "pass".into());
         let mut called = false;
-        app.action_with_runner(Action::RunBatch(entry), &mut |_, _, data, wait, _| {
+        app.action_with_runner(Action::RunBatch(entry), &mut |_, data, wait, _| {
             called = true;
             assert_eq!(data, b"exit 0");
             assert!(wait);
@@ -3320,7 +3322,7 @@ mod input_tests {
             app.start_batch();
             let mut runs = 0;
             while app.batch.is_some() {
-                app.advance_batch_with(&mut |_, _, _, _, _| {
+                app.advance_batch_with(&mut |_, _, _, _| {
                     runs += 1;
                     Ok(())
                 });
