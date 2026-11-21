@@ -1099,10 +1099,15 @@ fn prepare_script(
         .ends_with(".ps1");
     let local_path = entry.url.to_file_path().ok();
     let temporary = if local_path.is_none() {
-        let dir = tempfile::Builder::new()
-            .prefix("myeasytoolkit-")
-            .tempdir()
-            .map_err(|e| e.to_string())?;
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("myeasytoolkit-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            builder.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        let dir = builder.tempdir().map_err(|e| e.to_string())?;
         let path = dir
             .path()
             .join(if is_ps { "script.ps1" } else { "script.sh" });
@@ -2288,6 +2293,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod input_tests {
     use super::*;
     use ratatui::backend::TestBackend;
+
+    #[cfg(unix)]
+    #[test]
+    fn downloaded_scripts_have_a_private_temporary_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let entry = Entry {
+            name: "script.sh".into(),
+            url: Url::parse("https://example.test/script.sh").unwrap(),
+            directory: false,
+        };
+        let (_, temporary) = prepare_script(&entry, b"exit 0\n").unwrap();
+        let directory = temporary.unwrap();
+        let permissions = directory.path().metadata().unwrap().permissions();
+        assert_eq!(permissions.mode() & 0o077, 0);
+    }
 
     #[test]
     fn script_command_scopes_windows_policy_to_the_powershell_child() {
