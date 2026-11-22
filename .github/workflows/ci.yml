@@ -83,6 +83,8 @@ jobs:
           name: deb-${{ runner.arch }}
           path: dist/*.deb
           if-no-files-found: error
+          # Downloaded by the compatibility matrix of this run.
+          retention-days: 3
 
   apt-compatibility:
     needs: test
@@ -133,6 +135,8 @@ jobs:
           name: rpm-signature-fixtures
           path: ${{ runner.temp }}/met-rpm-fixtures
           if-no-files-found: error
+          # Keep failed-job retries possible for the compatibility matrix.
+          retention-days: 3
 
   rpm-compatibility:
     needs: rpm-fixtures
