@@ -86,18 +86,19 @@ fi
     dpkg-scanpackages --multiversion --arch "$arch" pool /dev/null > "dists/$suite/main/binary-$arch/Packages"
     gzip -n -c "dists/$suite/main/binary-$arch/Packages" > "dists/$suite/main/binary-$arch/Packages.gz"
   done
-  {
-    # Some apt-ftparchive versions ignore Changelogs in their configuration.
-    if [[ "$suite" == stable ]]; then
-      printf '%s\n' 'Changelogs: https://packages.myeasytoolkit.com/apt/changelogs/@CHANGEPATH@_changelog'
-    fi
-    apt-ftparchive -o APT::FTPArchive::Release::Origin=MyEasyToolkit \
+  release_metadata="$(apt-ftparchive -o APT::FTPArchive::Release::Origin=MyEasyToolkit \
       -o APT::FTPArchive::Release::Label=MyEasyToolkit \
       -o "APT::FTPArchive::Release::Suite=$suite" \
       -o "APT::FTPArchive::Release::Codename=$suite" \
       -o 'APT::FTPArchive::Release::Architectures=amd64 arm64' \
       -o APT::FTPArchive::Release::Components=main \
-      release "dists/$suite"
+      release "dists/$suite")"
+  {
+    # Some apt-ftparchive versions ignore Changelogs in their configuration.
+    if [[ "$suite" == stable ]]; then
+      printf '%s\n' 'Changelogs: https://packages.myeasytoolkit.com/apt/changelogs/@CHANGEPATH@_changelog'
+    fi
+    printf '%s\n' "$release_metadata"
   } > "dists/$suite/Release"
   gpg "${sign_args[@]}" --clearsign --output "dists/$suite/InRelease" "dists/$suite/Release"
   gpg "${sign_args[@]}" --armor --detach-sign --output "dists/$suite/Release.gpg" "dists/$suite/Release"
