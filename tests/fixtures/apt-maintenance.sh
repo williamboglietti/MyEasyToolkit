@@ -167,6 +167,14 @@ bash "$repair_script"
 test -x /usr/bin/myeasytoolkit
 test -s "/var/lib/dpkg/info/$name.md5sums"
 
+# Minimal images may deliberately omit the packaged README.
+filter=/etc/dpkg/dpkg.cfg.d/90-myeasytoolkit-fixture
+printf 'path-exclude=/usr/share/doc/myeasytoolkit/README.md\n' > "$filter"
+bash "$install_script"
+test ! -e "/usr/share/doc/$name/README.md"
+bash "$repair_script"
+rm "$filter"
+
 # A ring installed before the rotation may need upgrading during repair.
 bash packaging/build-archive-keyring-deb.sh "$work/key-1.gpg" "$primary" 2.0
 dpkg -i dist/keyring/"${ring}_2.0_all.deb"

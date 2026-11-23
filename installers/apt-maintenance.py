@@ -315,8 +315,17 @@ def package_payload(package):
     return [path for path, owner in PAYLOAD.items() if owner == package]
 
 
-def verified(package):
+def installed_payload(package):
     paths = package_payload(package)
+    if package == APP and not check_owner(README, APP):
+        # Minimal images can exclude documentation when dpkg unpacks a package.
+        # The CLI and keyring are required regardless of dpkg's path filters.
+        paths.remove(README)
+    return paths
+
+
+def verified(package):
+    paths = installed_payload(package)
     if any(not path.is_file() or stat.S_IMODE(path.stat().st_mode) != (0o755 if path == BINARY else 0o644)
            for path in paths):
         return False
@@ -327,7 +336,13 @@ def verified(package):
     names = set(re.findall(r'^[a-f0-9]{32}  (.+)$', sums.stdout, re.M))
     if not all(str(path.relative_to('/')) in names for path in paths):
         return False
-    return not re.search(r'^(?!.*\s+c\s).+', output('dpkg', '--verify', package), re.M)
+    problems = output('dpkg', '--verify', package).splitlines()
+    return not any(
+        not re.match(r'^.{9}\s+c\s', line)
+        and not (package == APP and README not in paths
+                 and re.match(r'^missing\s+' + re.escape(str(README)) + r'(?:\s|$)', line))
+        for line in problems
+    )
 
 
 def archive_payload(work, archive, package):
@@ -442,7 +457,7 @@ def maintain(mode, base, primary, signer, key_hash, arch):
                     run('dpkg', *dpkg_options, '--configure', package, env=dpkg_env)
                 validate_payload()
                 for package in (RING, APP):
-                    paths = package_payload(package)
+                    paths = installed_payload(package)
                     intact = (
                         all(path.is_file() and digest(path) == digest(payload[path]) for path in paths)
                         if package in packages else verified(package)
