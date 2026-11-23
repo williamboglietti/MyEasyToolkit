@@ -4,6 +4,7 @@ import contextlib
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import fcntl
+from fnmatch import fnmatchcase
 import hashlib
 import json
 import os
@@ -315,14 +316,29 @@ def package_payload(package):
     return [path for path, owner in PAYLOAD.items() if owner == package]
 
 
+def readme_excluded():
+    config = Path('/etc/dpkg')
+    snippets = sorted(path for path in (config / 'dpkg.cfg.d').glob('*')
+                      if re.fullmatch(r'[0-9A-Za-z_-]+', path.name))
+    excluded = False
+    # dpkg loads the snippets in order, then the main file. Its last matching
+    # path filter wins. The command environment here does not set HOME.
+    for path in (*snippets, config / 'dpkg.cfg'):
+        if not path.is_file():
+            continue
+        for line in path.read_text().splitlines():
+            rule = re.fullmatch(r'path-(exclude|include)\s*(?:=\s*|\s+)(.+)', line.strip())
+            if rule and fnmatchcase(str(README), rule[2].strip("'").strip('"')):
+                excluded = rule[1] == 'exclude'
+    return excluded
+
+
 def installed_payload(package):
     paths = package_payload(package)
-    if package == APP and not check_owner(README, APP):
-        # Minimal images can exclude documentation when dpkg unpacks a package.
+    if package == APP and not README.exists() and readme_excluded():
         # The CLI and keyring are required regardless of dpkg's path filters.
         paths.remove(README)
     return paths
-
 
 def verified(package):
     paths = installed_payload(package)
