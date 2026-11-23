@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+host_os="$(uname -s)"
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
 mkdir -p "$work_dir/bin" "$work_dir/fixture" "$work_dir/payload" "$work_dir/home"
@@ -34,6 +35,6 @@ if bash installers/install.sh; then
 fi
 
 # The APT scenarios mutate only the filesystem of a disposable Linux container.
-if [[ "$(uname -s)" == Linux ]]; then
+if [[ "$host_os" == Linux ]]; then
   bash tests/apt-maintenance.sh
 fi

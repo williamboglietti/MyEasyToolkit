@@ -138,12 +138,13 @@ def sources_and_config():
 def check_owner(path, package=None):
     result = run('dpkg-query', '-S', path, capture=True, stderr=subprocess.PIPE, check=False)
     if result.returncode == 1 and not result.stdout:
-        return
+        return False
     owners = result.stdout.splitlines()
     if result.returncode or len(owners) != 1 or package is None or not re.fullmatch(
         re.escape(package) + r'(?::[a-z0-9-]+)?: ' + re.escape(str(path)), owners[0],
     ):
         fail(f'Fichier déclaré par un autre paquet ou détourné. {path}')
+    return True
 
 
 def source_line(repo, arch, key):
@@ -205,7 +206,7 @@ def package_state(package):
     if not value:
         return 'n', ''
     status, _, version = value.partition('\t')
-    return status[1], version
+    return ('R' if status[2:3] == 'R' else status[1]), version
 
 
 def apt_options(source, lists):
@@ -485,7 +486,7 @@ def residual_plan(repo, hashes):
     for path, approved in hashes.items():
         if path.parent.exists():
             info = managed_file(path, mounted)
-            if info and (package_state(APP)[0] not in ('n', 'c') or digest(path) in approved):
+            if info and (check_owner(path, APP) or digest(path) in approved):
                 files[path] = identity(info)
             elif info:
                 print(f'Fichier conservé, appartenance non établie. {path}')
@@ -572,7 +573,12 @@ def uninstall(repo, hashes):
         if not info:
             atomic_write(JOURNAL, json.dumps({'packages': packages, 'files': files}).encode(), 0o600)
         if packages:
-            run('dpkg', '--purge', *packages, env=dict(ENV, DPKG_FRONTEND_LOCKED='true'))
+            # Restrict dpkg to the two confirmed packages even if a previous
+            # interruption marked one of them as requiring reinstallation.
+            dpkg_options = ['--force-remove-reinstreq'] if any(
+                package_state(package)[0] == 'R' for package in packages
+            ) else []
+            run('dpkg', *dpkg_options, '--purge', *packages, env=dict(ENV, DPKG_FRONTEND_LOCKED='true'))
             if any(package_state(package)[0] != 'n' for package in packages):
                 fail('Purge de paquets incomplète. Relancez la désinstallation.')
         configuration(repo)

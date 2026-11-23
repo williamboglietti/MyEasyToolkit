@@ -160,6 +160,19 @@ bash "$repair_script"
 cmp /usr/bin/myeasytoolkit "$payload/usr/bin/myeasytoolkit"
 test "$(myeasytoolkit --version)" = 'myeasytoolkit 1.2.3'
 
+# Earlier packages lack checksum metadata. The signed archive supplies it.
+rm "/var/lib/dpkg/info/$name.md5sums"
+chmod 644 /usr/bin/myeasytoolkit
+bash "$repair_script"
+test -x /usr/bin/myeasytoolkit
+test -s "/var/lib/dpkg/info/$name.md5sums"
+
+# A ring installed before the rotation may need upgrading during repair.
+bash packaging/build-archive-keyring-deb.sh "$work/key-1.gpg" "$primary" 2.0
+dpkg -i dist/keyring/"${ring}_2.0_all.deb"
+bash "$repair_script"
+test "$(dpkg-query -W -f='${Version}' "$ring")" = 3.0
+
 # A failure after the package write restores the original APT files.
 cp "$work/key-0.gpg" "$key"
 rm "$source"
