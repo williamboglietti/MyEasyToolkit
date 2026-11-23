@@ -102,10 +102,50 @@ for arch in amd64 arm64; do
   gpgv --keyring "$output_dir/apt/myeasytoolkit-archive-keyring.gpg" "$asset.asc" "$asset"
   (cd "$output_dir/releases/latest" && sha256sum "$(basename "$asset")" > "$(basename "$asset").sha256")
 done
-sed -e "s/__APT_FINGERPRINT__/$fingerprint/" -e "s/__APT_SIGNER_FINGERPRINT__/$signer/" installers/install.sh > "$output_dir/install.sh"
+# Embed the same maintenance code in each public command. All three scripts
+# travel with the signed repository and its fingerprints in the release bundle.
+key_hash="$(sha256sum "$output_dir/apt/myeasytoolkit-archive-keyring.gpg" | cut -d ' ' -f1)"
+binary_hashes=()
+readme_hashes=()
+for arch in amd64 arm64; do
+  dpkg-deb -x "${packages_by_arch[$arch]}" "$keyring_work/payload-$arch"
+  if [[ -e "$keyring_work/payload-$arch/usr/bin/myeasytoolkit" ]]; then
+    binary_hashes+=("$(sha256sum "$keyring_work/payload-$arch/usr/bin/myeasytoolkit" | cut -d ' ' -f1)")
+  fi
+  if [[ -e "$keyring_work/payload-$arch/usr/share/doc/myeasytoolkit/README.md" ]]; then
+    readme_hashes+=("$(sha256sum "$keyring_work/payload-$arch/usr/share/doc/myeasytoolkit/README.md" | cut -d ' ' -f1)")
+  fi
+done
+render_installer() {
+  local mode="$1"
+  local destination="$2"
+  local IFS=,
+  sed -e "s/__APT_MODE__/$mode/" \
+    -e "s/__APT_FINGERPRINT__/$fingerprint/" -e "s/__APT_SIGNER_FINGERPRINT__/$signer/" \
+    -e "s/__APT_KEY_SHA256__/$key_hash/" \
+    -e "s/__APT_BINARY_SHA256__/${binary_hashes[*]}/" -e "s/__APT_README_SHA256__/${readme_hashes[*]}/" \
+    -e "/^__APT_MAINTENANCE__$/r installers/apt-maintenance.py" -e '/^__APT_MAINTENANCE__$/d' \
+    installers/install.sh > "$destination"
+  chmod 644 "$destination"
+}
+render_installer install "$output_dir/install.sh"
+render_installer repair "$output_dir/releases/repair.sh"
+render_installer uninstall "$output_dir/releases/uninstall.sh"
 cp installers/install.ps1 "$output_dir/install.ps1"
 cat > "$output_dir/_headers" <<'HEADERS'
 /install.sh
+  Content-Type: text/plain; charset=utf-8
+  X-Content-Type-Options: nosniff
+/repair.sh
+  Content-Type: text/plain; charset=utf-8
+  X-Content-Type-Options: nosniff
+/uninstall.sh
+  Content-Type: text/plain; charset=utf-8
+  X-Content-Type-Options: nosniff
+/releases/repair.sh
+  Content-Type: text/plain; charset=utf-8
+  X-Content-Type-Options: nosniff
+/releases/uninstall.sh
   Content-Type: text/plain; charset=utf-8
   X-Content-Type-Options: nosniff
 /install.ps1
