@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 if [[ $# -ne 3 && $# -ne 4 ]]; then
   echo "Usage: $0 PACKAGES_DIR OUTPUT_DIR SIGNING_KEY_FINGERPRINT [KEYRING_DEB]" >&2
   exit 2
@@ -61,19 +63,42 @@ if [[ $# -eq 4 ]]; then
   mkdir -p "$output_dir/pool/main/m/myeasytoolkit-archive-keyring"
   cp "$keyring_deb" "$output_dir/pool/main/m/myeasytoolkit-archive-keyring/"
 fi
+if [[ "$suite" == stable ]]; then
+  for changelog in "$script_dir"/changelogs/*_changelog; do
+    filename="${changelog##*/}"
+    if [[ ! "$filename" =~ ^(myeasytoolkit(-archive-keyring)?)_([0-9][A-Za-z0-9.+~-]{0,100})_changelog$ ]]; then
+      echo "Nom de changelog APT invalide : $filename" >&2
+      exit 1
+    fi
+    source_name="${BASH_REMATCH[1]}"
+    version="${BASH_REMATCH[3]}"
+    if ! IFS= read -r header < "$changelog" || [[ "$header" != "$source_name ($version) "* ]]; then
+      echo "En-tête de changelog APT invalide : $filename" >&2
+      exit 1
+    fi
+    install -d "$output_dir/changelogs/main/m/$source_name"
+    install -m 644 "$changelog" "$output_dir/changelogs/main/m/$source_name/$filename"
+  done
+fi
 (
   cd "$output_dir"
   for arch in amd64 arm64; do
     dpkg-scanpackages --multiversion --arch "$arch" pool /dev/null > "dists/$suite/main/binary-$arch/Packages"
     gzip -n -c "dists/$suite/main/binary-$arch/Packages" > "dists/$suite/main/binary-$arch/Packages.gz"
   done
-  apt-ftparchive -o APT::FTPArchive::Release::Origin=MyEasyToolkit \
-    -o APT::FTPArchive::Release::Label=MyEasyToolkit \
-    -o "APT::FTPArchive::Release::Suite=$suite" \
-    -o "APT::FTPArchive::Release::Codename=$suite" \
-    -o 'APT::FTPArchive::Release::Architectures=amd64 arm64' \
-    -o APT::FTPArchive::Release::Components=main \
-    release "dists/$suite" > "dists/$suite/Release"
+  {
+    # Some apt-ftparchive versions ignore Changelogs in their configuration.
+    if [[ "$suite" == stable ]]; then
+      printf '%s\n' 'Changelogs: https://packages.myeasytoolkit.com/apt/changelogs/@CHANGEPATH@_changelog'
+    fi
+    apt-ftparchive -o APT::FTPArchive::Release::Origin=MyEasyToolkit \
+      -o APT::FTPArchive::Release::Label=MyEasyToolkit \
+      -o "APT::FTPArchive::Release::Suite=$suite" \
+      -o "APT::FTPArchive::Release::Codename=$suite" \
+      -o 'APT::FTPArchive::Release::Architectures=amd64 arm64' \
+      -o APT::FTPArchive::Release::Components=main \
+      release "dists/$suite"
+  } > "dists/$suite/Release"
   gpg "${sign_args[@]}" --clearsign --output "dists/$suite/InRelease" "dists/$suite/Release"
   gpg "${sign_args[@]}" --armor --detach-sign --output "dists/$suite/Release.gpg" "dists/$suite/Release"
   actual_signer="$(gpg --batch --status-fd 1 --verify "dists/$suite/InRelease" 2>/dev/null | awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print $3 }')"

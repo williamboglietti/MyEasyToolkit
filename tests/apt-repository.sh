@@ -124,6 +124,15 @@ bash packaging/stage-release.sh "$work_dir/release-input" "$work_dir/staged" "$f
 for test_arch in amd64 arm64; do
   grep -qx 'Package: myeasytoolkit-archive-keyring' "$work_dir/staged/apt/dists/stable/main/binary-$test_arch/Packages"
 done
+printf 'deb [arch=%s signed-by=%s] file:%s stable main\n' "$arch" "$work_dir/staged/apt/myeasytoolkit-archive-keyring.gpg" "$work_dir/staged/apt" > "$work_dir/sources.list"
+update_test_apt > "$work_dir/staged-update.log" 2>&1
+for name in myeasytoolkit myeasytoolkit-archive-keyring; do
+  changelog="changelogs/main/m/$name/${name}_${package_version}_changelog"
+  LC_ALL=C apt-get -o "Dir::Etc::sourcelist=$work_dir/sources.list" -o Dir::Etc::sourceparts=- \
+    -o "Dir::State::lists=$work_dir/apt/lists" -o "Dir::Cache=$work_dir/apt/cache" \
+    --print-uris changelog "$name=$package_version" | grep -F "'https://packages.myeasytoolkit.com/apt/$changelog'"
+  cmp "packaging/changelogs/${changelog##*/}" "$work_dir/staged/apt/$changelog"
+done
 keyring_package=("$work_dir/staged/apt/pool/main/m/myeasytoolkit-archive-keyring/"*.deb)
 [[ ${#keyring_package[@]} -eq 1 ]]
 mkdir -p "$work_dir/keyring-control"

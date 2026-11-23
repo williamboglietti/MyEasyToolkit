@@ -1,0 +1,6 @@
+myeasytoolkit-archive-keyring (0.1.7) stable; urgency=medium
+
+  * Distribuer le trousseau OpenPGP public utilisé par le dépôt APT stable.
+  * Inclure la sous-clé de production qui signe les index de cette publication.
+
+ -- MyEasyToolkit <security@myeasytoolkit.com>  Mon, 23 Nov 2026 15:22:01 +0000
