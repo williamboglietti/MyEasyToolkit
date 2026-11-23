@@ -2,51 +2,32 @@
 set -euo pipefail
 
 base_url='https://packages.myeasytoolkit.com'
-apt_fingerprint='__APT_FINGERPRINT__'
-apt_signer_fingerprint='__APT_SIGNER_FINGERPRINT__'
+mode='__APT_MODE__'
+case "$mode" in repair|uninstall) ;; *) mode=install ;; esac
+if [[ "$(uname -s)" == Linux ]] && command -v apt-get >/dev/null; then
+  if [[ ! -x /usr/bin/python3 ]]; then
+    echo 'Python 3 est requis pour les opérations APT MyEasyToolkit.' >&2
+    exit 1
+  fi
+  root=()
+  if [[ "$(id -u)" != 0 ]]; then root=(sudo --); fi
+  exec "${root[@]}" /usr/bin/python3 -I - "$mode" "$base_url" \
+    '__APT_FINGERPRINT__' '__APT_SIGNER_FINGERPRINT__' '__APT_KEY_SHA256__' \
+    '__APT_BINARY_SHA256__' '__APT_README_SHA256__' <<'MET_APT_MAINTENANCE'
+__APT_MAINTENANCE__
+MET_APT_MAINTENANCE
+elif [[ "$mode" != install ]]; then
+  echo 'Ce lanceur est réservé à Linux avec APT.' >&2
+  exit 1
+fi
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
-
-run_root() {
-  if [[ "$(id -u)" == 0 ]]; then "$@"; else sudo "$@"; fi
-}
 
 case "$(uname -m)" in
   x86_64|amd64) arch=amd64 ;;
   arm64|aarch64) arch=arm64 ;;
   *) echo 'Architecture non prise en charge.' >&2; exit 1 ;;
 esac
-
-if [[ "$(uname -s)" == Linux ]] && command -v apt-get >/dev/null; then
-  apt_arch="$(dpkg --print-architecture)"
-  case "$apt_arch" in
-    amd64|arm64) ;;
-    *) echo "Architecture Debian non prise en charge : $apt_arch" >&2; exit 1 ;;
-  esac
-  if [[ ! "$apt_fingerprint" =~ ^[A-F0-9]{40}$ || ! "$apt_signer_fingerprint" =~ ^[A-F0-9]{40}$ ]]; then
-    echo 'Installateur incomplet : empreinte de signature absente.' >&2; exit 1
-  fi
-  if ! command -v gpg >/dev/null; then
-    run_root apt-get update
-    run_root apt-get install -y gnupg ca-certificates
-  fi
-  curl -fsSL "$base_url/apt/myeasytoolkit-archive-keyring.gpg" -o "$work_dir/keyring.gpg"
-  gpg --batch --with-subkey-fingerprint --show-keys --with-colons "$work_dir/keyring.gpg" > "$work_dir/key-info"
-  actual_fingerprint="$(awk -F: '$1 == "fpr" { print $10; exit }' "$work_dir/key-info")"
-  primary_count="$(awk -F: '$1 == "pub" { count++ } END { print count+0 }' "$work_dir/key-info")"
-  actual_subkeys="$(awk -F: '$1 == "sub" { subkey=1; next } subkey && $1 == "fpr" { print $10; subkey=0 }' "$work_dir/key-info")"
-  if [[ "$actual_fingerprint" != "$apt_fingerprint" || "$primary_count" != 1 ]] ||
-     ! { [[ "$apt_signer_fingerprint" == "$actual_fingerprint" && -z "$actual_subkeys" ]] || [[ "$actual_subkeys" == "$apt_signer_fingerprint" ]]; }; then
-    echo 'La clé du dépôt ne correspond pas à la clé attendue.' >&2; exit 1
-  fi
-  printf 'deb [arch=%s signed-by=/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg] %s/apt stable main\n' "$apt_arch" "$base_url" > "$work_dir/myeasytoolkit.list"
-  run_root install -m 644 "$work_dir/keyring.gpg" /usr/share/keyrings/myeasytoolkit-archive-keyring.gpg
-  run_root install -m 644 "$work_dir/myeasytoolkit.list" /etc/apt/sources.list.d/myeasytoolkit.list
-  run_root apt-get update
-  run_root apt-get install -y myeasytoolkit-archive-keyring myeasytoolkit
-  echo 'Installation terminée. Lancez : myeasytoolkit'
-  exit 0
-fi
 
 case "$(uname -s)" in
   Darwin) platform=darwin ;;

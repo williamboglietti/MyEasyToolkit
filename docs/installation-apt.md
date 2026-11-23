@@ -1,43 +1,36 @@
-# Installation APT manuelle
+# Installation, réparation et désinstallation APT
 
-Cette procédure concerne Debian et Ubuntu sur les architectures `amd64` et `arm64`. Elle nécessite que la version comprenant le paquet `myeasytoolkit-archive-keyring` ait été publiée ; sa préparation dans le dépôt de sources ne signifie pas qu'elle est déjà disponible en ligne.
+Ces commandes concernent Debian et Ubuntu sur `amd64` et `arm64`. Elles utilisent Bash, Python 3, curl, les certificats CA du système et gpgv. Le lanceur demande les droits via `sudo` si nécessaire. Les trois commandes deviennent disponibles avec la publication de l’archive signée et du site de distribution.
 
-Empreintes prévues pour la prochaine publication de production :
+## Installer ou rétablir le dépôt stable
 
-- Clé principale : `3E484A3CC09A798022AEA0C01A91FD19F9E87AE7`.
-- Sous-clé stable : `A0EF38D209213D2AB5761B814BBD7ACB126A6842`.
+```bash
+curl -fsSL https://myeasytoolkit.com/install.sh | bash
+```
 
-Ces empreintes s'appliquent à la rotation vers la nouvelle clé de production. Préparer la mise à jour du trousseau des clients avant la bascule du dépôt. Les machines qui font encore confiance à l'ancienne clé de production devront installer le nouveau trousseau par un canal de confiance.
+Une relance peut rétablir la source dédiée et remplacer un trousseau absent, illisible ou obsolète. Le lanceur utilise des listes APT neuves et vérifie un index signé datant de 90 jours au plus, ainsi que le champ `Valid-Until` lorsque le dépôt le publie. Les fichiers APT précédents sont rétablis si une erreur survient pendant leur remplacement. En cas d’installation de paquet interrompue, utilisez la commande de réparation.
 
-1. Installer les outils nécessaires et télécharger la clé publique dans un répertoire temporaire :
+Les empreintes épinglées par la publication stable actuelle sont les suivantes.
 
-   ```bash
-   sudo apt-get update
-   sudo apt-get install -y ca-certificates curl gnupg
-   met_tmp="$(mktemp -d)"
-   curl -fsSL https://packages.myeasytoolkit.com/apt/myeasytoolkit-archive-keyring.gpg -o "$met_tmp/keyring.gpg"
-   gpg --show-keys --fingerprint --with-subkey-fingerprint "$met_tmp/keyring.gpg"
-   gpg --show-keys --with-colons "$met_tmp/keyring.gpg" | awk -F: '$1 == "pub" { n++ } END { if (n != 1) { print "Nombre de clés principales inattendu" > "/dev/stderr"; exit 1 } }'
-   ```
+- Clé principale `3E484A3CC09A798022AEA0C01A91FD19F9E87AE7`
+- Sous-clé de signature `A0EF38D209213D2AB5761B814BBD7ACB126A6842`
 
-2. Si l'une des commandes échoue, ne pas poursuivre. Comparer **l'empreinte complète de la clé principale et celle de la sous-clé stable** avec les empreintes officielles obtenues par un canal de confiance indépendant. Arrêter en cas de différence ou si les empreintes ne peuvent pas être confirmées. Une empreinte récupérée uniquement sur le même serveur que la clé ne permet pas de vérifier son authenticité en cas de compromission de ce serveur. Les clés de test ne doivent pas être utilisées en production.
+Comparez les empreintes à celles publiées par le projet via un canal de confiance indépendant pour auditer une rotation. APT utilise la source `/etc/apt/sources.list.d/myeasytoolkit.list` et le fichier `/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg`, géré par le paquet `myeasytoolkit-archive-keyring`.
 
-3. Après cette vérification, renseigner l'empreinte complète de la **sous-clé stable** vérifiée, puis ajouter la source et les paquets. Remplacer le texte entre apostrophes :
+## Réparer une installation
 
-   ```bash
-   met_signer='REMPLACER_PAR_EMPREINTE_STABLE_VERIFIEE'
-   met_subkeys="$(gpg --show-keys --with-colons --with-subkey-fingerprint "$met_tmp/keyring.gpg" | awk -F: '$1 == "sub" {s=1;next} s && $1 == "fpr" {print $10;s=0}')"
-   if [[ "$met_signer" =~ ^[A-F0-9]{40}$ && "$met_subkeys" == "$met_signer" ]]; then
-     sudo install -d -m 755 /usr/share/keyrings /etc/apt/sources.list.d &&
-     sudo install -m 644 "$met_tmp/keyring.gpg" /usr/share/keyrings/myeasytoolkit-archive-keyring.gpg &&
-     met_arch="$(dpkg --print-architecture)" &&
-     printf 'deb [arch=%s signed-by=/usr/share/keyrings/myeasytoolkit-archive-keyring.gpg] https://packages.myeasytoolkit.com/apt stable main\n' "$met_arch" | sudo tee /etc/apt/sources.list.d/myeasytoolkit.list > /dev/null &&
-     sudo apt-get update && sudo apt-get install myeasytoolkit-archive-keyring myeasytoolkit
-   else
-     echo 'Empreinte de signature invalide ou absente du trousseau : installation interrompue.' >&2
-   fi
-   ```
+```bash
+curl -fsSL https://packages.myeasytoolkit.com/repair.sh | bash
+```
 
-Le paquet de clés gère ensuite le fichier référencé par `signed-by`. `apt update` actualise les listes ; `apt upgrade` ou l'installation explicite d'une nouvelle version installe les mises à jour, y compris celles du paquet de clés. Cette procédure ne configure aucun programme de vérification personnalisé à chaque appel d'APT.
+Le lanceur vérifie le dépôt signé, l’état et l’intégrité des deux paquets, puis teste `myeasytoolkit --version` et `myeasytoolkit --help`. Il termine une configuration de paquet interrompue et restaure les fichiers de l’application à partir de la même version si elle est disponible dans le dépôt signé. Il peut actualiser le paquet de clés à la suite d’une rotation. Les données de l’application sont conservées.
 
-Cette procédure prévoit une clé principale de certification et une seule sous-clé stable dans le trousseau initial. Pour une rotation préparée, un paquet de clés peut distribuer temporairement l'ancienne et la nouvelle sous-clé de production, avant le changement de signature. Le trousseau stable ne doit jamais contenir une sous-clé de test. Une machine restée hors ligne pendant la transition peut nécessiter une intervention.
+## Désinstaller et purger
+
+```bash
+curl -fsSL https://packages.myeasytoolkit.com/uninstall.sh | bash
+```
+
+Dans un terminal interactif, vérifiez l’aperçu puis tapez `OUI` et `PURGER`. Le lanceur retire les deux paquets, la source et le trousseau dédiés et les résidus qu’il reconnaît, y compris lorsque les paquets ont déjà été retirés. Il conserve les données utilisateur et les fichiers dont il ne peut pas établir l’appartenance. En cas de montage, de lien ou d’usage partagé, il interrompt la purge pour laisser l’administrateur examiner le chemin indiqué.
+
+Après une interruption, relancez la même commande. Elle présente les actions restantes et demande à nouveau les deux confirmations. Le journal de reprise se trouve dans `/var/lib/myeasytoolkit-apt-removal.json`.

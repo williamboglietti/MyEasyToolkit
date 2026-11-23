@@ -57,5 +57,6 @@ Maintainer: MyEasyToolkit
 Description: Public signing keys for the MyEasyToolkit APT repository
  Public OpenPGP keyring used to authenticate the MyEasyToolkit APT repository.
 CONTROL
+(cd "$work_dir/package" && md5sum usr/share/keyrings/myeasytoolkit-archive-keyring.gpg > DEBIAN/md5sums)
 mkdir -p dist/keyring
 dpkg-deb -Zxz --build --root-owner-group "$work_dir/package" "dist/keyring/myeasytoolkit-archive-keyring_${version}_all.deb"

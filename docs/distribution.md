@@ -37,7 +37,7 @@ L'installateur généré vérifie que le trousseau initial contient uniquement l
 
 La préparation du [canal de test](apt-canaux.md) est distincte de sa publication, qui n'est pas activée par ce changement.
 
-Les étapes d'[installation manuelle](installation-apt.md) et de [réponse à une compromission](incident-cle-apt.md) s'appliquent après validation et publication effectives de cette version. Aucune clé de production ni migration n'est réalisée par leur préparation.
+Les étapes d'[gestion de l’installation APT](installation-apt.md) et de [réponse à une compromission](incident-cle-apt.md) s'appliquent après validation et publication effectives de cette version. Aucune clé de production ni migration n'est réalisée par leur préparation.
 
 ## Télécharger et vérifier un paquet Debian
 

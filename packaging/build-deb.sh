@@ -45,6 +45,7 @@ Depends: libc6, ca-certificates, bash
 Description: Browse and run scripts from HTTP repositories
  Interactive terminal browser for public and authenticated script repositories.
 CONTROL
+(cd "$package_dir" && md5sum usr/bin/myeasytoolkit usr/share/doc/myeasytoolkit/README.md > DEBIAN/md5sums)
 mkdir -p dist
 # zstd, the default on recent dpkg versions, cannot be read by Debian 10/11.
 dpkg-deb -Zxz --build --root-owner-group "$package_dir" "dist/myeasytoolkit_${version}_${arch}.deb"
