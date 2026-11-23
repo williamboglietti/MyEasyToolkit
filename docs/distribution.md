@@ -1,5 +1,10 @@
 # Préparer une publication
 
+Pour toute nouvelle version des paquets Debian, ajouter les notes au format
+Debian dans `packaging/changelogs/`, sous le nom `PAQUET_VERSION_changelog`.
+Pour le paquet de trousseau, utiliser sa propre version. L’index stable signé
+annonce l’URL utilisée par `apt changelog`.
+
 Le workflow « Publish validated release » peut être lancé manuellement sur `main`. Le lancement automatique après une CI réussie sur `main` est désactivé tant que la variable de dépôt `PACKAGES_MYEASYTOOLKIT_COM_DEPLOY_ENABLED` n'est pas définie à `true`. Il refuse de publier si le commit validé n’est plus la tête de `main`, construit les binaires et les deux paquets Debian, génère le dépôt APT, signe l’ensemble de distribution et demande au dépôt MyEasyToolkit.com de le publier.
 
 La publication exige :

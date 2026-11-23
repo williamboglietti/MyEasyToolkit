@@ -1,0 +1,8 @@
+myeasytoolkit (0.1.7) stable; urgency=medium
+
+  * Rétablir le téléchargement et l’exécution des scripts génériques.
+  * Distribuer les commandes APT d’installation, de réparation et de désinstallation.
+  * Permettre la réparation du dépôt signé après une rotation de clé
+    et la restauration des fichiers du paquet à version identique.
+
+ -- MyEasyToolkit <security@myeasytoolkit.com>  Mon, 23 Nov 2026 15:22:01 +0000
